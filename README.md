@@ -20,73 +20,86 @@ crates/validation Semantic validation and preflight diagnostics
 examples          Example templates and data
 ```
 
-## Try it
+## CLI
+
+During development, run the CLI through Cargo as `cargo run -- <COMMAND>`.
+After installing the binary, use the equivalent `print-forge <COMMAND>` form.
+Every command supports `--help`; the root command also supports `--version`.
+
+### Commands
+
+| Command | Usage | Purpose |
+| --- | --- | --- |
+| `validate` | `validate <TEMPLATE> [--dataset <DATASET>]` | Validate a JSON template and, optionally, every CSV or JSON dataset row. |
+| `inspect-data` | `inspect-data <DATASET>` | Parse a CSV or JSON dataset and report its row count. |
+| `render` | `render <TEMPLATE> <DATASET> <OUTPUT> [OPTIONS]` | Render one combined PDF or one PDF per selected dataset row. |
+
+For `render`, `<OUTPUT>` is a PDF path in combined mode and a directory in
+separate mode.
+
+### Render options
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `--output-mode <MODE>` | `combined` | Choose `combined` for one multipage PDF or `separate` for one PDF per row. |
+| `--rows <START-END>` | All rows | Select a one-based, inclusive row range. |
+| `--limit <COUNT>` | No limit | Limit the number of rows after applying `--rows`. |
+| `--continue-on-error` | Off | Continue after row failures; the command still exits unsuccessfully if any row fails. |
+| `--output-name <PATTERN>` | `row-{{row}}` | Set filenames in separate mode using fields, dotted paths, and the one-based `{{row}}` value. |
+| `--summary <PATH>` | None | Write a JSON job summary with results, warnings, output paths, and elapsed time. |
+| `--print-ready` | Off | Enable PDF/X-4, 300 DPI image preflight, and mandatory embedded fonts. |
+| `--min-image-dpi <DPI>` | None | Reject images below the specified effective output resolution. |
+| `--require-embedded-fonts` | Off | Reject built-in PDF fonts and require embedded external fonts. |
+| `--pdf-x <x4>` | None | Generate and validate against the selected PDF/X target. |
+
+Separate-mode names are made filesystem-safe. Existing or duplicate names get
+a numeric suffix instead of being overwritten. `--print-ready` is the complete
+prepress preset; `--pdf-x`, `--min-image-dpi`, and
+`--require-embedded-fonts` can also be selected independently.
+
+### Examples
 
 ```sh
-cargo run -- validate examples/business-card.json
+# Discover the complete API.
+cargo run -- --help
+cargo run -- render --help
+
+# Validate inputs or inspect a dataset.
 cargo run -- validate examples/business-card.json --dataset examples/people.csv
-cargo run -- render examples/business-card.json examples/people.csv output/pdf/business-cards.pdf
-cargo run -- render examples/absolute-layout.json examples/absolute-layout-data.json output/pdf/absolute-layout.pdf
-cargo run -- render examples/flow-layout.json examples/flow-layout-data.json output/pdf/flow-layout.pdf
-cargo test --workspace
-```
+cargo run -- inspect-data examples/people.csv
 
-To see validation failures for missing and empty required CSV fields:
-
-```sh
-cargo run -- validate examples/business-card.json --dataset examples/invalid-people.csv
-```
-
-## Variable-data jobs
-
-Combined mode is the default. Every selected dataset row contributes the
-template's pages to one PDF:
-
-```sh
+# Render every row into one combined PDF.
 cargo run -- render examples/business-card.json examples/people.csv \
   output/pdf/business-cards.pdf \
   --summary output/jobs/business-cards.json
-```
 
-Separate mode writes one PDF per row. Output names accept dotted dataset fields
-and the special one-based `{{row}}` value. Names are made filesystem-safe, and
-existing or duplicate names receive a numeric suffix instead of being
-overwritten:
-
-```sh
+# Render selected rows into separate, safely named PDFs.
 cargo run -- render examples/business-card.json examples/people.csv \
   output/pdf/business-cards \
   --output-mode separate \
   --output-name '{{last_name}}-{{first_name}}' \
   --rows 1-2 \
-  --limit 2 \
-  --continue-on-error \
-  --summary output/jobs/business-cards.json
-```
+  --continue-on-error
 
-Row ranges are one-based and inclusive. `--limit` is applied after the range.
-`--continue-on-error` attempts the remaining rows and produces valid partial
-output, but the command still exits unsuccessfully when any row fails. The JSON
-summary records status, successes, warnings, failures, output paths, per-row
-results, and elapsed milliseconds.
-
-## Print-ready output
-
-`--print-ready` enables the complete prepress profile: PDF/X-4 with a FOGRA39
-output intent, 300 DPI image preflight, mandatory embedded fonts, document
-metadata, and explicit media, bleed, crop, and trim boxes.
-
-```sh
+# Apply the complete print-ready preset.
 cargo run -- render examples/business-card.json examples/people.csv \
   output/pdf/business-cards-print-ready.pdf \
-  --print-ready \
-  --summary output/jobs/business-cards-print-ready.json
+  --print-ready
+
+# Render the flow-layout and pagination fixture.
+cargo run -- render examples/flow-layout.json examples/flow-layout-data.json \
+  output/pdf/flow-layout.pdf
 ```
 
-The checks can also be selected independently with `--pdf-x x4`,
-`--min-image-dpi <DPI>`, and `--require-embedded-fonts`. PDF/X output is
-validated after serialization and rejected if its version, XMP declaration,
-output intent, ICC profile, page boxes, or embedded fonts are incomplete.
+## Output and template behavior
+
+### Print-ready PDFs
+
+The print-ready preset produces PDF/X-4 with a FOGRA39 output intent, 300 DPI
+image preflight, mandatory embedded fonts, document metadata, and explicit
+media, bleed, crop, and trim boxes. PDF/X output is validated after
+serialization and rejected if its version, XMP declaration, output intent, ICC
+profile, page boxes, or embedded fonts are incomplete.
 
 Colors use one of three strict forms: `#RRGGBB`, `rgb(R, G, B)` with integer
 components from 0 to 255, or `cmyk(C%, M%, Y%, K%)` with percentages from 0 to
@@ -95,17 +108,12 @@ fields are `title`, `author`, `subject`, `keywords`, and `identifier`. When no
 identifier is supplied, Print Forge derives a stable one from the resolved
 document. Identical inputs produce byte-identical PDFs.
 
-## Flow layout and pagination
+### Flow layout and pagination
 
 A positioned `stack` defines a flow region that can coexist with absolute
 elements on the same template page. Vertical stacks place children from top to
 bottom and create continuation pages by default; horizontal stacks place one
 row from left to right. Both support uniform `padding` and inter-item `gap`.
-
-```sh
-cargo run -- render examples/flow-layout.json examples/flow-layout-data.json \
-  output/pdf/flow-layout.pdf
-```
 
 Within a flow stack, child `position.width` and `position.height` are size
 hints; `position.x` and `position.y` are ignored. Vertical text may omit its
@@ -129,6 +137,14 @@ The current renderer supports measured and wrapped text, embedded font
 families, local PNG/JPEG images, rectangles, lines, stacks, and pagination.
 Asset paths are resolved relative to the template file. SVG, QR codes, tables,
 groups, and repeaters remain explicit implementation errors.
+
+## Development
+
+```sh
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+```
 
 ## MVP roadmap
 
