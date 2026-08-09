@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/brand/print-forge-logo.png" alt="Print Forge logo" width="720">
+</p>
+
 # Print Forge
 
 Print Forge is an early Rust workspace for data-driven print and PDF generation.
