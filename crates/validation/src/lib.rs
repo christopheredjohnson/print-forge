@@ -5,7 +5,7 @@ use std::{collections::HashSet, fmt};
 use print_forge_dataset::{DataRow, Dataset};
 use print_forge_template::{
     Bounds, Color, DocumentMetadata, Element, Field, FieldType, FontFamily, Length, Page,
-    StackElement, TableElement, Template,
+    StackDirection, StackElement, TableElement, Template,
 };
 
 pub const SUPPORTED_SCHEMA_VERSION: u32 = 1;
@@ -300,6 +300,12 @@ fn validate_color(value: &str, path: impl Into<String>, report: &mut ValidationR
 }
 
 fn validate_page(page: &Page, page_index: usize, canvas: Canvas, report: &mut ValidationReport) {
+    for (section, elements) in [("header", &page.header), ("footer", &page.footer)] {
+        for (element_index, element) in elements.iter().enumerate() {
+            let path = format!("pages[{page_index}].{section}[{element_index}]");
+            validate_element(element, &path, canvas, PositionContext::Repeating, report);
+        }
+    }
     for (element_index, element) in page.elements.iter().enumerate() {
         let path = format!("pages[{page_index}].elements[{element_index}]");
         validate_element(element, &path, canvas, PositionContext::Absolute, report);
@@ -323,6 +329,15 @@ fn validate_element(
                 position_context,
                 report,
             );
+            if position_context == PositionContext::Flow(StackDirection::Horizontal)
+                && text.position.is_none()
+            {
+                report.error(
+                    "flow.missing_size_hint",
+                    format!("{path}.position"),
+                    "horizontal flow text requires position width and height as size hints",
+                );
+            }
             validate_positive_length(
                 text.font_size,
                 format!("{path}.font_size"),
@@ -363,6 +378,13 @@ fn validate_element(
                 position_context,
                 report,
             );
+            validate_required_flow_size_hint(
+                image.position.as_ref(),
+                path,
+                "image",
+                position_context,
+                report,
+            );
             if image.source.trim().is_empty() {
                 report.error(
                     "image.empty_source",
@@ -380,6 +402,13 @@ fn validate_element(
                 position_context,
                 report,
             );
+            validate_required_flow_size_hint(
+                rectangle.position.as_ref(),
+                path,
+                "rectangle",
+                position_context,
+                report,
+            );
             if let Some(stroke) = &rectangle.stroke {
                 validate_positive_length(
                     stroke.width,
@@ -394,6 +423,13 @@ fn validate_element(
             }
         }
         Element::Line(line) => {
+            if matches!(position_context, PositionContext::Flow(_)) {
+                report.error(
+                    "flow.unsupported_coordinates",
+                    path,
+                    "line elements use absolute coordinates and cannot be flow children",
+                );
+            }
             validate_finite_length(line.x1, format!("{path}.x1"), "line coordinate", report);
             validate_finite_length(line.y1, format!("{path}.y1"), "line coordinate", report);
             validate_finite_length(line.x2, format!("{path}.x2"), "line coordinate", report);
@@ -413,22 +449,40 @@ fn validate_element(
                 );
             }
         }
-        Element::Svg(svg) => validate_optional_bounds(
-            svg.position.as_ref(),
-            path,
-            "svg",
-            canvas,
-            position_context,
-            report,
-        ),
-        Element::QrCode(qr_code) => validate_optional_bounds(
-            qr_code.position.as_ref(),
-            path,
-            "qr_code",
-            canvas,
-            position_context,
-            report,
-        ),
+        Element::Svg(svg) => {
+            validate_optional_bounds(
+                svg.position.as_ref(),
+                path,
+                "svg",
+                canvas,
+                position_context,
+                report,
+            );
+            validate_required_flow_size_hint(
+                svg.position.as_ref(),
+                path,
+                "svg",
+                position_context,
+                report,
+            );
+        }
+        Element::QrCode(qr_code) => {
+            validate_optional_bounds(
+                qr_code.position.as_ref(),
+                path,
+                "qr_code",
+                canvas,
+                position_context,
+                report,
+            );
+            validate_required_flow_size_hint(
+                qr_code.position.as_ref(),
+                path,
+                "qr_code",
+                position_context,
+                report,
+            );
+        }
         Element::Group(group) => {
             if let Some(position) = &group.position {
                 validate_bounds(position, &format!("{path}.position"), canvas, report);
@@ -453,6 +507,13 @@ fn validate_element(
                 position_context,
                 report,
             );
+            validate_required_flow_size_hint(
+                table.position.as_ref(),
+                path,
+                "table",
+                position_context,
+                report,
+            );
             validate_table(table, path, report);
         }
         Element::Repeater(repeater) => {
@@ -467,11 +528,23 @@ fn validate_element(
                 &repeater.template,
                 &format!("{path}.template"),
                 canvas,
-                PositionContext::Flow,
+                PositionContext::Flow(StackDirection::Vertical),
                 report,
             );
         }
-        Element::PageBreak => {}
+        Element::PageBreak => match position_context {
+            PositionContext::Repeating => report.error(
+                "flow.page_break_in_repeating_content",
+                path,
+                "page breaks are not allowed in repeating headers or footers",
+            ),
+            PositionContext::Flow(StackDirection::Horizontal) => report.error(
+                "flow.page_break_in_horizontal_stack",
+                path,
+                "page breaks are not valid in horizontal stacks",
+            ),
+            PositionContext::Absolute | PositionContext::Flow(StackDirection::Vertical) => {}
+        },
     }
 }
 
@@ -491,13 +564,52 @@ fn validate_stack(
         report,
     );
     validate_nonnegative_length(stack.gap, format!("{path}.gap"), "stack gap", report);
+    validate_nonnegative_length(
+        stack.padding,
+        format!("{path}.padding"),
+        "stack padding",
+        report,
+    );
+    if stack.orphans == 0 {
+        report.error(
+            "flow.invalid_orphans",
+            format!("{path}.orphans"),
+            "stack orphans must be at least 1",
+        );
+    }
+    if stack.keep_together
+        && stack
+            .children
+            .iter()
+            .any(|element| matches!(element, Element::PageBreak))
+    {
+        report.error(
+            "flow.keep_together_page_break",
+            format!("{path}.children"),
+            "a keep-together stack cannot contain an explicit page break",
+        );
+    }
+    if let Some(position) = &stack.position {
+        let padding = stack.padding.to_points();
+        if padding.is_finite()
+            && padding >= 0.0
+            && (position.width.to_points() <= padding * 2.0
+                || position.height.to_points() <= padding * 2.0)
+        {
+            report.error(
+                "flow.padding_exceeds_bounds",
+                format!("{path}.padding"),
+                "stack padding must leave positive content width and height",
+            );
+        }
+    }
 
     for (index, child) in stack.children.iter().enumerate() {
         validate_element(
             child,
             &format!("{path}.children[{index}]"),
             canvas,
-            PositionContext::Flow,
+            PositionContext::Flow(stack.direction),
             report,
         );
     }
@@ -565,14 +677,54 @@ fn validate_optional_bounds(
     report: &mut ValidationReport,
 ) {
     match bounds {
+        Some(bounds) if matches!(position_context, PositionContext::Flow(_)) => {
+            validate_flow_bounds(bounds, &format!("{path}.position"), report);
+        }
         Some(bounds) => validate_bounds(bounds, &format!("{path}.position"), canvas, report),
-        None if position_context == PositionContext::Absolute => report.error(
-            "element.missing_position",
-            format!("{path}.position"),
-            format!("absolute-positioned {element_name} element requires position"),
-        ),
+        None if matches!(
+            position_context,
+            PositionContext::Absolute | PositionContext::Repeating
+        ) =>
+        {
+            report.error(
+                "element.missing_position",
+                format!("{path}.position"),
+                format!("absolute-positioned {element_name} element requires position"),
+            )
+        }
         None => {}
     }
+}
+
+fn validate_required_flow_size_hint(
+    bounds: Option<&Bounds>,
+    path: &str,
+    element_name: &str,
+    position_context: PositionContext,
+    report: &mut ValidationReport,
+) {
+    if matches!(position_context, PositionContext::Flow(_)) && bounds.is_none() {
+        report.error(
+            "flow.missing_size_hint",
+            format!("{path}.position"),
+            format!("flow {element_name} requires position width and height as size hints"),
+        );
+    }
+}
+
+fn validate_flow_bounds(bounds: &Bounds, path: &str, report: &mut ValidationReport) {
+    validate_positive_length(
+        bounds.width,
+        format!("{path}.width"),
+        "flow item width",
+        report,
+    );
+    validate_positive_length(
+        bounds.height,
+        format!("{path}.height"),
+        "flow item height",
+        report,
+    );
 }
 
 fn validate_bounds(bounds: &Bounds, path: &str, canvas: Canvas, report: &mut ValidationReport) {
@@ -766,5 +918,6 @@ impl Canvas {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PositionContext {
     Absolute,
-    Flow,
+    Repeating,
+    Flow(StackDirection),
 }

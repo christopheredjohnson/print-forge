@@ -253,6 +253,14 @@ const fn default_schema_version() -> u32 {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Page {
+    /// Absolute-positioned elements repeated on every physical page generated
+    /// from this template page.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub header: Vec<Element>,
+    /// Absolute-positioned elements repeated on every physical page generated
+    /// from this template page.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub footer: Vec<Element>,
     #[serde(default)]
     pub elements: Vec<Element>,
 }
@@ -437,7 +445,16 @@ pub struct StackElement {
     pub position: Option<Bounds>,
     #[serde(default)]
     pub direction: StackDirection,
+    #[serde(default = "zero_length")]
     pub gap: Length,
+    #[serde(default = "zero_length")]
+    pub padding: Length,
+    #[serde(default)]
+    pub overflow: FlowOverflow,
+    #[serde(default)]
+    pub keep_together: bool,
+    #[serde(default = "default_orphans")]
+    pub orphans: usize,
     #[serde(default)]
     pub children: Vec<Element>,
 }
@@ -448,6 +465,14 @@ pub enum StackDirection {
     Horizontal,
     #[default]
     Vertical,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FlowOverflow {
+    #[default]
+    Paginate,
+    Error,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -492,9 +517,17 @@ fn default_color() -> String {
     "#000000".to_owned()
 }
 
+const fn zero_length() -> Length {
+    Length::points(0.0)
+}
+
+const fn default_orphans() -> usize {
+    1
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Color, Length};
+    use super::{Color, Element, FlowOverflow, Length, Template};
 
     #[test]
     fn converts_supported_units_to_points() {
@@ -524,5 +557,31 @@ mod tests {
         assert!("#12345".parse::<Color>().is_err());
         assert!("rgb(256, 0, 0)".parse::<Color>().is_err());
         assert!("cmyk(0, 0%, 0%, 0%)".parse::<Color>().is_err());
+    }
+
+    #[test]
+    fn stack_flow_options_have_safe_defaults() {
+        let template: Template = serde_json::from_str(
+            r#"{
+              "name": "Flow defaults",
+              "document": {
+                "width": { "value": 100, "unit": "points" },
+                "height": { "value": 100, "unit": "points" }
+              },
+              "pages": [{
+                "elements": [{ "type": "stack", "children": [] }]
+              }]
+            }"#,
+        )
+        .unwrap();
+
+        let Element::Stack(stack) = &template.pages[0].elements[0] else {
+            panic!("expected stack");
+        };
+        assert_eq!(stack.gap, Length::points(0.0));
+        assert_eq!(stack.padding, Length::points(0.0));
+        assert_eq!(stack.overflow, FlowOverflow::Paginate);
+        assert!(!stack.keep_together);
+        assert_eq!(stack.orphans, 1);
     }
 }
