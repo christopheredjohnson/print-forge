@@ -3,7 +3,7 @@
 //! The concrete `printpdf` adapter belongs in this crate; other crates should
 //! only depend on the renderer-neutral engine types.
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use print_forge_engine::{
     DrawCommand, LineCommand, LineDash, RectangleCommand, ResolvedDocument, StrokeCommand,
     TextCommand,
@@ -27,21 +27,21 @@ impl DocumentRenderer for PdfRenderer {
         let height = points_to_mm(document.height_pt);
         let mut pages = Vec::with_capacity(document.pages.len());
 
-        for page in &document.pages {
+        for (page_index, page) in document.pages.iter().enumerate() {
             let mut ops = Vec::new();
 
             for command in &page.commands {
-                match command {
-                    DrawCommand::Text(text) => render_text(text, &mut ops)?,
-                    DrawCommand::Rectangle(rectangle) => {
-                        render_rectangle(rectangle, &mut ops)?;
-                    }
-                    DrawCommand::Line(line) => render_line(line, &mut ops)?,
-                    DrawCommand::Image(_) => {
-                        bail!("image rendering is not implemented yet")
-                    }
-                    DrawCommand::Svg(_) => bail!("SVG rendering is not implemented yet"),
-                }
+                let result = match &command.command {
+                    DrawCommand::Text(text) => render_text(text, &mut ops),
+                    DrawCommand::Rectangle(rectangle) => render_rectangle(rectangle, &mut ops),
+                    DrawCommand::Line(line) => render_line(line, &mut ops),
+                    DrawCommand::Image(_) => Err(anyhow!("image rendering is not implemented yet")),
+                    DrawCommand::Svg(_) => Err(anyhow!("SVG rendering is not implemented yet")),
+                };
+
+                result.with_context(|| {
+                    format!("page {page_index}, element {}", command.source_path)
+                })?;
             }
 
             pages.push(PdfPage::new(width, height, ops));
@@ -229,8 +229,8 @@ fn points_to_mm(points: f32) -> Mm {
 #[cfg(test)]
 mod tests {
     use print_forge_engine::{
-        DrawCommand, LineCommand, LineDash, Point, Rect, ResolvedDocument, ResolvedPage,
-        TextCommand,
+        DrawCommand, ImageCommand, LineCommand, LineDash, Point, Rect, ResolvedCommand,
+        ResolvedDocument, ResolvedPage, TextCommand,
     };
     use printpdf::{PdfDocument, PdfParseOptions};
 
@@ -244,25 +244,31 @@ mod tests {
             height_pt: 144.0,
             pages: vec![ResolvedPage {
                 commands: vec![
-                    DrawCommand::Text(TextCommand {
-                        bounds: Rect {
-                            x: 36.0,
-                            y: 96.0,
-                            width: 180.0,
-                            height: 18.0,
-                        },
-                        value: "Ada Lovelace".to_owned(),
-                        font_size_pt: 16.0,
-                        font: None,
-                        color: "#112233".to_owned(),
-                    }),
-                    DrawCommand::Line(LineCommand {
-                        start: Point { x: 36.0, y: 72.0 },
-                        end: Point { x: 216.0, y: 72.0 },
-                        width_pt: 0.5,
-                        color: "#000000".to_owned(),
-                        dash: LineDash::Solid,
-                    }),
+                    ResolvedCommand {
+                        source_path: "pages[0].elements[0]".to_owned(),
+                        command: DrawCommand::Text(TextCommand {
+                            bounds: Rect {
+                                x: 36.0,
+                                y: 96.0,
+                                width: 180.0,
+                                height: 18.0,
+                            },
+                            value: "Ada Lovelace".to_owned(),
+                            font_size_pt: 16.0,
+                            font: None,
+                            color: "#112233".to_owned(),
+                        }),
+                    },
+                    ResolvedCommand {
+                        source_path: "pages[0].elements[1]".to_owned(),
+                        command: DrawCommand::Line(LineCommand {
+                            start: Point { x: 36.0, y: 72.0 },
+                            end: Point { x: 216.0, y: 72.0 },
+                            width_pt: 0.5,
+                            color: "#000000".to_owned(),
+                            dash: LineDash::Solid,
+                        }),
+                    },
                 ],
             }],
         };
@@ -273,5 +279,32 @@ mod tests {
 
         assert!(bytes.starts_with(b"%PDF-"));
         assert_eq!(parsed.pages.len(), 1);
+    }
+
+    #[test]
+    fn rendering_errors_include_page_and_element_paths() {
+        let document = ResolvedDocument {
+            title: "Renderer error".to_owned(),
+            width_pt: 100.0,
+            height_pt: 100.0,
+            pages: vec![ResolvedPage {
+                commands: vec![ResolvedCommand {
+                    source_path: "pages[0].elements[3]".to_owned(),
+                    command: DrawCommand::Image(ImageCommand {
+                        bounds: Rect {
+                            x: 0.0,
+                            y: 0.0,
+                            width: 50.0,
+                            height: 50.0,
+                        },
+                        source: "logo.png".to_owned(),
+                    }),
+                }],
+            }],
+        };
+
+        let error = PdfRenderer.render(&document).unwrap_err().to_string();
+
+        assert!(error.contains("page 0, element pages[0].elements[3]"));
     }
 }

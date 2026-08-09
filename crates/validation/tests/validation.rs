@@ -1,0 +1,206 @@
+use print_forge_dataset::Dataset;
+use print_forge_template::Template;
+use print_forge_validation::{Severity, validate_job, validate_template};
+
+fn template(json: &str) -> Template {
+    serde_json::from_str(json).unwrap()
+}
+
+#[test]
+fn accepts_the_business_card_fixture() {
+    let template: Template =
+        serde_json::from_str(include_str!("../../../examples/business-card.json")).unwrap();
+    let dataset =
+        Dataset::from_csv_reader(include_bytes!("../../../examples/people.csv").as_slice())
+            .unwrap();
+
+    let report = validate_job(&template, &dataset);
+
+    assert!(report.is_valid(), "{:#?}", report.diagnostics());
+    assert_eq!(report.warning_count(), 0);
+}
+
+#[test]
+fn rejects_the_invalid_csv_fixture_with_exact_row_paths() {
+    let template: Template =
+        serde_json::from_str(include_str!("../../../examples/business-card.json")).unwrap();
+    let dataset =
+        Dataset::from_csv_reader(include_bytes!("../../../examples/invalid-people.csv").as_slice())
+            .unwrap();
+
+    let report = validate_job(&template, &dataset);
+    let paths: Vec<_> = report
+        .errors()
+        .map(|diagnostic| diagnostic.path.as_str())
+        .collect();
+
+    assert_eq!(report.error_count(), 3);
+    assert!(paths.contains(&"rows[0].title"));
+    assert!(paths.contains(&"rows[1].last_name"));
+    assert!(paths.contains(&"rows[1].title"));
+}
+
+#[test]
+fn rejects_incompatible_schema_and_invalid_document() {
+    let template = template(
+        r#"{
+          "schema_version": 2,
+          "name": "Broken",
+          "document": {
+            "width": { "value": 0, "unit": "points" },
+            "height": { "value": 100, "unit": "points" }
+          },
+          "pages": []
+        }"#,
+    );
+
+    let report = validate_template(&template);
+    let codes: Vec<_> = report.errors().map(|diagnostic| diagnostic.code).collect();
+
+    assert!(codes.contains(&"schema.unsupported_version"));
+    assert!(codes.contains(&"value.not_positive"));
+    assert!(codes.contains(&"document.no_pages"));
+    assert!(
+        report
+            .errors()
+            .find(|diagnostic| diagnostic.code == "schema.unsupported_version")
+            .unwrap()
+            .message
+            .contains("Migrate the template")
+    );
+}
+
+#[test]
+fn rejects_invalid_element_dimensions_and_table_widths() {
+    let template = template(
+        r##"{
+          "name": "Invalid elements",
+          "document": {
+            "width": { "value": 100, "unit": "points" },
+            "height": { "value": 100, "unit": "points" }
+          },
+          "pages": [{
+            "elements": [
+              {
+                "type": "text",
+                "position": {
+                  "x": { "value": 10, "unit": "points" },
+                  "y": { "value": 10, "unit": "points" },
+                  "width": { "value": 0, "unit": "points" },
+                  "height": { "value": 20, "unit": "points" }
+                },
+                "value": "invalid",
+                "font_size": { "value": 0, "unit": "points" }
+              },
+              {
+                "type": "rectangle",
+                "position": {
+                  "x": { "value": 10, "unit": "points" },
+                  "y": { "value": 10, "unit": "points" },
+                  "width": { "value": 20, "unit": "points" },
+                  "height": { "value": 20, "unit": "points" }
+                },
+                "stroke": {
+                  "width": { "value": -1, "unit": "points" }
+                }
+              },
+              {
+                "type": "table",
+                "position": {
+                  "x": { "value": 10, "unit": "points" },
+                  "y": { "value": 10, "unit": "points" },
+                  "width": { "value": 80, "unit": "points" },
+                  "height": { "value": 80, "unit": "points" }
+                },
+                "source": "items",
+                "columns": [
+                  { "field": "name", "header": "Name", "width": 0.4 },
+                  { "field": "price", "header": "Price", "width": 0.4 }
+                ]
+              }
+            ]
+          }]
+        }"##,
+    );
+
+    let report = validate_template(&template);
+    let paths: Vec<_> = report
+        .errors()
+        .map(|diagnostic| diagnostic.path.as_str())
+        .collect();
+
+    assert!(paths.contains(&"pages[0].elements[0].position.width"));
+    assert!(paths.contains(&"pages[0].elements[0].font_size"));
+    assert!(paths.contains(&"pages[0].elements[1].stroke.width"));
+    assert!(paths.contains(&"pages[0].elements[2].columns"));
+}
+
+#[test]
+fn reports_empty_datasets_and_missing_required_fields_with_row_paths() {
+    let template = template(
+        r#"{
+          "name": "Required fields",
+          "document": {
+            "width": { "value": 100, "unit": "points" },
+            "height": { "value": 100, "unit": "points" }
+          },
+          "fields": [
+            { "name": "customer.name", "field_type": "text", "required": true }
+          ],
+          "pages": [{ "elements": [] }]
+        }"#,
+    );
+
+    let empty_report = validate_job(&template, &Dataset::default());
+    assert!(
+        empty_report
+            .errors()
+            .any(|diagnostic| diagnostic.code == "dataset.empty")
+    );
+
+    let dataset = Dataset::from_json_reader(r#"[{"customer":{}}]"#.as_bytes()).unwrap();
+    let report = validate_job(&template, &dataset);
+    let diagnostic = report
+        .errors()
+        .find(|diagnostic| diagnostic.code == "dataset.missing_required_field")
+        .unwrap();
+
+    assert_eq!(diagnostic.path, "rows[0].customer.name");
+}
+
+#[test]
+fn warns_when_an_element_exceeds_the_page_and_bleed() {
+    let template = template(
+        r##"{
+          "name": "Clipped",
+          "document": {
+            "width": { "value": 100, "unit": "points" },
+            "height": { "value": 100, "unit": "points" },
+            "bleed": { "value": 5, "unit": "points" }
+          },
+          "pages": [{
+            "elements": [{
+              "type": "text",
+              "position": {
+                "x": { "value": 90, "unit": "points" },
+                "y": { "value": 90, "unit": "points" },
+                "width": { "value": 20, "unit": "points" },
+                "height": { "value": 20, "unit": "points" }
+              },
+              "value": "clipped",
+              "font_size": { "value": 10, "unit": "points" }
+            }]
+          }]
+        }"##,
+    );
+
+    let report = validate_template(&template);
+    let diagnostic = report
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.code == "element.outside_bleed")
+        .unwrap();
+
+    assert_eq!(diagnostic.severity, Severity::Warning);
+    assert_eq!(diagnostic.path, "pages[0].elements[0].position");
+}

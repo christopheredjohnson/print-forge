@@ -9,6 +9,7 @@ use print_forge_dataset::Dataset;
 use print_forge_engine::{BasicLayoutEngine, LayoutEngine};
 use print_forge_pdf::{DocumentRenderer, PdfRenderer};
 use print_forge_template::Template;
+use print_forge_validation::{ValidationReport, validate_job, validate_template};
 
 #[derive(Debug, Parser)]
 #[command(name = "print-forge", version, about = "Data-driven print generation")]
@@ -20,7 +21,12 @@ struct Cli {
 #[derive(Debug, Subcommand)]
 enum Command {
     /// Parse a template and report its basic structure.
-    Validate { template: PathBuf },
+    Validate {
+        template: PathBuf,
+        /// Also validate template fields against every dataset row.
+        #[arg(long)]
+        dataset: Option<PathBuf>,
+    },
     /// Parse a CSV or JSON dataset and report its row count.
     InspectData { dataset: PathBuf },
     /// Render the first dataset row to a PDF file.
@@ -33,7 +39,7 @@ enum Command {
 
 fn main() -> Result<()> {
     match Cli::parse().command {
-        Command::Validate { template } => validate_template(&template),
+        Command::Validate { template, dataset } => validate_inputs(&template, dataset.as_deref()),
         Command::InspectData { dataset } => inspect_data(&dataset),
         Command::Render {
             template,
@@ -43,15 +49,25 @@ fn main() -> Result<()> {
     }
 }
 
-fn validate_template(path: &Path) -> Result<()> {
+fn validate_inputs(path: &Path, dataset_path: Option<&Path>) -> Result<()> {
     let template = load_template(path)?;
     let element_count: usize = template.pages.iter().map(|page| page.elements.len()).sum();
+    let report = if let Some(dataset_path) = dataset_path {
+        let dataset = load_dataset(dataset_path)?;
+        validate_job(&template, &dataset)
+    } else {
+        validate_template(&template)
+    };
+
+    print_diagnostics(&report);
+    require_valid(&report)?;
 
     println!(
-        "valid template: {} ({} page(s), {} top-level element(s))",
+        "valid template: {} ({} page(s), {} top-level element(s), {} warning(s))",
         template.name,
         template.pages.len(),
-        element_count
+        element_count,
+        report.warning_count()
     );
 
     Ok(())
@@ -84,12 +100,22 @@ fn load_dataset(path: &Path) -> Result<Dataset> {
 fn render(template_path: &Path, dataset_path: &Path, output_path: &Path) -> Result<()> {
     let template = load_template(template_path)?;
     let dataset = load_dataset(dataset_path)?;
+    let report = validate_job(&template, &dataset);
+
+    print_diagnostics(&report);
+    require_valid(&report)?;
+
+    let row_index = 0;
     let row = dataset
         .rows
-        .first()
+        .get(row_index)
         .context("cannot render an empty dataset")?;
-    let document = BasicLayoutEngine.layout(&template, row)?;
-    let pdf = PdfRenderer.render(&document)?;
+    let document = BasicLayoutEngine
+        .layout(&template, row)
+        .with_context(|| format!("failed to lay out dataset row {row_index}"))?;
+    let pdf = PdfRenderer
+        .render(&document)
+        .with_context(|| format!("failed to render dataset row {row_index}"))?;
 
     if let Some(parent) = output_path
         .parent()
@@ -109,4 +135,22 @@ fn render(template_path: &Path, dataset_path: &Path, output_path: &Path) -> Resu
         pdf.len()
     );
     Ok(())
+}
+
+fn print_diagnostics(report: &ValidationReport) {
+    for diagnostic in report.diagnostics() {
+        eprintln!("{diagnostic}");
+    }
+}
+
+fn require_valid(report: &ValidationReport) -> Result<()> {
+    if report.is_valid() {
+        return Ok(());
+    }
+
+    anyhow::bail!(
+        "validation failed with {} error(s) and {} warning(s)",
+        report.error_count(),
+        report.warning_count()
+    )
 }

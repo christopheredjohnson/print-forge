@@ -755,6 +755,7 @@ dependencies = [
  "print-forge-engine",
  "print-forge-pdf",
  "print-forge-template",
+ "print-forge-validation",
  "serde_json",
 ]
 
@@ -791,6 +792,15 @@ name = "print-forge-template"
 version = "0.1.0"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "print-forge-validation"
+version = "0.1.0"
+dependencies = [
+ "print-forge-dataset",
+ "print-forge-template",
+ "serde_json",
 ]
 
 [[package]]

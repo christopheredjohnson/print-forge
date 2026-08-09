@@ -6,6 +6,7 @@ members = [
     "crates/engine",
     "crates/pdf",
     "crates/template",
+    "crates/validation",
 ]
 default-members = ["apps/cli"]
 
@@ -28,6 +29,7 @@ print-forge-dataset = { path = "crates/dataset" }
 print-forge-engine = { path = "crates/engine" }
 print-forge-pdf = { path = "crates/pdf" }
 print-forge-template = { path = "crates/template" }
+print-forge-validation = { path = "crates/validation" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
