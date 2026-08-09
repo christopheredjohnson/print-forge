@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "name": "Employee Business Card",
+  "document": {
+    "width": { "value": 3.5, "unit": "inches" },
+    "height": { "value": 2.0, "unit": "inches" },
+    "bleed": { "value": 0.125, "unit": "inches" }
+  },
+  "fields": [
+    { "name": "first_name", "field_type": "text", "required": true },
+    { "name": "last_name", "field_type": "text", "required": true },
+    { "name": "title", "field_type": "text", "required": true }
+  ],
+  "pages": [
+    {
+      "elements": [
+        {
+          "type": "text",
+          "position": {
+            "x": { "value": 1.0, "unit": "inches" },
+            "y": { "value": 1.45, "unit": "inches" },
+            "width": { "value": 2.1, "unit": "inches" },
+            "height": { "value": 0.25, "unit": "inches" }
+          },
+          "value": "{{first_name}} {{last_name}}",
+          "font_size": { "value": 16, "unit": "points" }
+        },
+        {
+          "type": "text",
+          "position": {
+            "x": { "value": 1.0, "unit": "inches" },
+            "y": { "value": 1.1, "unit": "inches" },
+            "width": { "value": 2.1, "unit": "inches" },
+            "height": { "value": 0.2, "unit": "inches" }
+          },
+          "value": "{{title}}",
+          "font_size": { "value": 9, "unit": "points" }
+        },
+        {
+          "type": "line",
+          "x1": { "value": 1.0, "unit": "inches" },
+          "y1": { "value": 0.9, "unit": "inches" },
+          "x2": { "value": 3.1, "unit": "inches" },
+          "y2": { "value": 0.9, "unit": "inches" },
+          "width": { "value": 0.5, "unit": "points" }
+        }
+      ]
+    }
+  ]
+}

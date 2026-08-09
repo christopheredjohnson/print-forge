@@ -1,0 +1,33 @@
+[workspace]
+resolver = "2"
+members = [
+    "apps/cli",
+    "crates/dataset",
+    "crates/engine",
+    "crates/pdf",
+    "crates/template",
+]
+default-members = ["apps/cli"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+anyhow = "1.0.104"
+clap = { version = "4.6.6", features = ["derive"] }
+csv = "1.4.0"
+printpdf = "0.12.5"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+thiserror = "2.0.20"
+
+print-forge-dataset = { path = "crates/dataset" }
+print-forge-engine = { path = "crates/engine" }
+print-forge-pdf = { path = "crates/pdf" }
+print-forge-template = { path = "crates/template" }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
