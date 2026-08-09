@@ -21,8 +21,8 @@ examples          Example templates and data
 ```sh
 cargo run -- validate examples/business-card.json
 cargo run -- validate examples/business-card.json --dataset examples/people.csv
-op
 cargo run -- render examples/business-card.json examples/people.csv output/pdf/business-card.pdf
+cargo run -- render examples/absolute-layout.json examples/absolute-layout-data.json output/pdf/absolute-layout.pdf
 cargo test --workspace
 ```
 
@@ -32,9 +32,10 @@ To see validation failures for missing and empty required CSV fields:
 cargo run -- validate examples/business-card.json --dataset examples/invalid-people.csv
 ```
 
-The current renderer supports absolute-positioned text, rectangles, and lines.
-Images, SVG, QR codes, and flow elements such as stacks and tables are modeled
-in the schema but remain explicit implementation errors during rendering.
+The current renderer supports measured and wrapped absolute-positioned text,
+embedded font families, local PNG/JPEG images, rectangles, and lines. Asset
+paths are resolved relative to the template file. SVG, QR codes, and flow
+elements such as stacks and tables remain explicit implementation errors.
 
 ## MVP roadmap
 
@@ -67,15 +68,15 @@ each priority before moving to the next unless an item is clearly independent.
 
 ### 2. Finish the essential absolute-layout elements
 
-- [ ] Add text measurement, wrapping, explicit line height, alignment, and
+- [x] Add text measurement, wrapping, explicit line height, alignment, and
       overflow policies (`clip`, `shrink`, and `error`).
-- [ ] Load and embed external font files with regular, bold, italic, and
+- [x] Load and embed external font files with regular, bold, italic, and
       bold-italic variants.
-- [ ] Render PNG and JPEG images from local paths.
-- [ ] Implement image `contain`, `cover`, and `stretch` behavior with clipping.
-- [ ] Resolve asset paths relative to the template file instead of the current
+- [x] Render PNG and JPEG images from local paths.
+- [x] Implement image `contain`, `cover`, and `stretch` behavior with clipping.
+- [x] Resolve asset paths relative to the template file instead of the current
       working directory.
-- [ ] Add visual regression fixtures for text, images, rectangles, and lines.
+- [x] Add visual regression fixtures for text, images, rectangles, and lines.
 
 ### 3. Support real variable-data jobs
 

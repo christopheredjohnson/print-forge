@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 anyhow.workspace = true
 print-forge-engine.workspace = true
+print-forge-template.workspace = true
 printpdf.workspace = true
 
 [lints]

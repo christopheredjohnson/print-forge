@@ -6,7 +6,7 @@ use std::{
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use print_forge_dataset::Dataset;
-use print_forge_engine::{BasicLayoutEngine, LayoutEngine};
+use print_forge_engine::{BasicLayoutEngine, LayoutOptions};
 use print_forge_pdf::{DocumentRenderer, PdfRenderer};
 use print_forge_template::Template;
 use print_forge_validation::{ValidationReport, validate_job, validate_template};
@@ -110,8 +110,15 @@ fn render(template_path: &Path, dataset_path: &Path, output_path: &Path) -> Resu
         .rows
         .get(row_index)
         .context("cannot render an empty dataset")?;
+    let asset_base = template_path.parent().unwrap_or_else(|| Path::new("."));
     let document = BasicLayoutEngine
-        .layout(&template, row)
+        .layout_with_options(
+            &template,
+            row,
+            &LayoutOptions {
+                asset_base: asset_base.to_owned(),
+            },
+        )
         .with_context(|| format!("failed to lay out dataset row {row_index}"))?;
     let pdf = PdfRenderer
         .render(&document)

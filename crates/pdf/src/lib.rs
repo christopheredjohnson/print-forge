@@ -3,14 +3,21 @@
 //! The concrete `printpdf` adapter belongs in this crate; other crates should
 //! only depend on the renderer-neutral engine types.
 
+use std::{
+    collections::HashMap,
+    fs,
+    path::{Path, PathBuf},
+};
+
 use anyhow::{Context, Result, anyhow, bail};
 use print_forge_engine::{
-    DrawCommand, LineCommand, LineDash, RectangleCommand, ResolvedDocument, StrokeCommand,
-    TextCommand,
+    DrawCommand, ImageCommand, LineCommand, LineDash, RectangleCommand, ResolvedDocument,
+    ResolvedFont, StrokeCommand, TextCommand,
 };
 use printpdf::{
-    BuiltinFont, Color, Line, LineDashPattern, LinePoint, Mm, Op, PaintMode, PdfDocument,
-    PdfFontHandle, PdfPage, PdfSaveOptions, Point, Pt, Rect, Rgb, TextItem, WindingOrder,
+    BuiltinFont, Color, Line, LineDashPattern, LinePoint, Mm, Op, PaintMode, ParsedFont,
+    PdfDocument, PdfFontHandle, PdfPage, PdfSaveOptions, Point, Pt, RawImage, Rect, Rgb, TextItem,
+    WindingOrder, XObjectTransform,
 };
 
 pub trait DocumentRenderer {
@@ -25,6 +32,8 @@ impl DocumentRenderer for PdfRenderer {
     fn render(&self, document: &ResolvedDocument) -> Result<Vec<u8>> {
         let width = points_to_mm(document.width_pt);
         let height = points_to_mm(document.height_pt);
+        let mut pdf = PdfDocument::new(&document.title);
+        let mut fonts = HashMap::new();
         let mut pages = Vec::with_capacity(document.pages.len());
 
         for (page_index, page) in document.pages.iter().enumerate() {
@@ -32,10 +41,10 @@ impl DocumentRenderer for PdfRenderer {
 
             for command in &page.commands {
                 let result = match &command.command {
-                    DrawCommand::Text(text) => render_text(text, &mut ops),
+                    DrawCommand::Text(text) => render_text(text, &mut pdf, &mut fonts, &mut ops),
                     DrawCommand::Rectangle(rectangle) => render_rectangle(rectangle, &mut ops),
                     DrawCommand::Line(line) => render_line(line, &mut ops),
-                    DrawCommand::Image(_) => Err(anyhow!("image rendering is not implemented yet")),
+                    DrawCommand::Image(image) => render_image(image, &mut pdf, &mut ops),
                     DrawCommand::Svg(_) => Err(anyhow!("SVG rendering is not implemented yet")),
                 };
 
@@ -47,44 +56,147 @@ impl DocumentRenderer for PdfRenderer {
             pages.push(PdfPage::new(width, height, ops));
         }
 
-        let mut pdf = PdfDocument::new(&document.title);
         pdf.with_pages(pages);
 
         Ok(pdf.save(&PdfSaveOptions::default(), &mut Vec::new()))
     }
 }
 
-fn render_text(command: &TextCommand, ops: &mut Vec<Op>) -> Result<()> {
-    let font = builtin_font(command.font.as_deref())?;
+fn render_text(
+    command: &TextCommand,
+    pdf: &mut PdfDocument,
+    fonts: &mut HashMap<PathBuf, PdfFontHandle>,
+    ops: &mut Vec<Op>,
+) -> Result<()> {
+    let font = pdf_font(&command.font, pdf, fonts)?;
     let color = parse_color(&command.color)?;
 
-    ops.extend([
-        Op::SaveGraphicsState,
-        Op::StartTextSection,
-        Op::SetTextCursor {
-            pos: pdf_point(command.bounds.x, command.bounds.y),
-        },
-        Op::SetFont {
-            font: PdfFontHandle::Builtin(font),
-            size: Pt(command.font_size_pt),
-        },
-        Op::SetLineHeight {
-            lh: Pt(command.font_size_pt * 1.2),
-        },
-        Op::SetFillColor { col: color },
-    ]);
-
-    for (index, line) in command.value.split('\n').enumerate() {
-        if index > 0 {
-            ops.push(Op::AddLineBreak);
-        }
-        ops.push(Op::ShowText {
-            items: vec![TextItem::Text(line.to_owned())],
-        });
+    ops.push(Op::SaveGraphicsState);
+    if command.clip {
+        push_clip_rect(command.bounds, ops);
+    }
+    for line in &command.lines {
+        ops.extend([
+            Op::StartTextSection,
+            Op::SetTextCursor {
+                pos: pdf_point(line.x, line.y),
+            },
+            Op::SetFont {
+                font: font.clone(),
+                size: Pt(command.font_size_pt),
+            },
+            Op::SetLineHeight {
+                lh: Pt(command.line_height_pt),
+            },
+            Op::SetFillColor { col: color.clone() },
+            Op::SetWordSpacing {
+                pt: Pt(line.word_spacing_pt),
+            },
+            Op::ShowText {
+                items: vec![TextItem::Text(line.value.clone())],
+            },
+            Op::EndTextSection,
+        ]);
     }
 
-    ops.extend([Op::EndTextSection, Op::RestoreGraphicsState]);
+    ops.push(Op::RestoreGraphicsState);
     Ok(())
+}
+
+fn pdf_font(
+    font: &ResolvedFont,
+    pdf: &mut PdfDocument,
+    fonts: &mut HashMap<PathBuf, PdfFontHandle>,
+) -> Result<PdfFontHandle> {
+    match font {
+        ResolvedFont::Builtin(name) => Ok(PdfFontHandle::Builtin(builtin_font(name)?)),
+        ResolvedFont::External(path) => {
+            if let Some(font) = fonts.get(path) {
+                return Ok(font.clone());
+            }
+            let bytes = fs::read(path)
+                .with_context(|| format!("failed to read font {}", path.display()))?;
+            let parsed = ParsedFont::from_bytes(&bytes, 0, &mut Vec::new())
+                .ok_or_else(|| anyhow!("failed to parse font {}", path.display()))?;
+            let handle = PdfFontHandle::External(pdf.add_font(&parsed));
+            fonts.insert(path.clone(), handle.clone());
+            Ok(handle)
+        }
+    }
+}
+
+fn render_image(command: &ImageCommand, pdf: &mut PdfDocument, ops: &mut Vec<Op>) -> Result<()> {
+    ensure_supported_image(&command.source)?;
+    let bytes = fs::read(&command.source)
+        .with_context(|| format!("failed to read image {}", command.source.display()))?;
+    let image = RawImage::decode_from_bytes(&bytes, &mut Vec::new()).map_err(|error| {
+        anyhow!(
+            "failed to decode image {}: {error}",
+            command.source.display()
+        )
+    })?;
+    let image_width = image.width as f32;
+    let image_height = image.height as f32;
+    let (width, height) = (command.bounds.width, command.bounds.height);
+
+    let (scale_x, scale_y) = match command.fit {
+        print_forge_template::ImageFit::Contain => {
+            let scale = (width / image_width).min(height / image_height);
+            (scale, scale)
+        }
+        print_forge_template::ImageFit::Cover => {
+            let scale = (width / image_width).max(height / image_height);
+            (scale, scale)
+        }
+        print_forge_template::ImageFit::Stretch => (width / image_width, height / image_height),
+    };
+    let placed_width = image_width * scale_x;
+    let placed_height = image_height * scale_y;
+    let x = command.bounds.x + (width - placed_width) / 2.0;
+    let y = command.bounds.y + (height - placed_height) / 2.0;
+    let image_id = pdf.add_image(&image);
+
+    ops.push(Op::SaveGraphicsState);
+    if command.fit == print_forge_template::ImageFit::Cover {
+        push_clip_rect(command.bounds, ops);
+    }
+    ops.push(Op::UseXobject {
+        id: image_id,
+        transform: XObjectTransform {
+            translate_x: Some(Pt(x)),
+            translate_y: Some(Pt(y)),
+            scale_x: Some(scale_x),
+            scale_y: Some(scale_y),
+            dpi: Some(72.0),
+            ..Default::default()
+        },
+    });
+    ops.push(Op::RestoreGraphicsState);
+    Ok(())
+}
+
+fn ensure_supported_image(path: &Path) -> Result<()> {
+    match path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(str::to_ascii_lowercase)
+    {
+        Some(extension) if matches!(extension.as_str(), "png" | "jpg" | "jpeg") => Ok(()),
+        _ => bail!("image must be a local PNG or JPEG file: {}", path.display()),
+    }
+}
+
+fn push_clip_rect(bounds: print_forge_engine::Rect, ops: &mut Vec<Op>) {
+    ops.push(Op::DrawRectangle {
+        rectangle: Rect {
+            x: Pt(bounds.x),
+            y: Pt(bounds.y),
+            width: Pt(bounds.width),
+            height: Pt(bounds.height),
+            mode: Some(PaintMode::Clip),
+            winding_order: Some(WindingOrder::NonZero),
+        },
+    });
 }
 
 fn render_rectangle(command: &RectangleCommand, ops: &mut Vec<Op>) -> Result<()> {
@@ -168,11 +280,7 @@ fn push_stroke(stroke: &StrokeCommand, ops: &mut Vec<Op>) -> Result<()> {
     Ok(())
 }
 
-fn builtin_font(name: Option<&str>) -> Result<BuiltinFont> {
-    let Some(name) = name else {
-        return Ok(BuiltinFont::Helvetica);
-    };
-
+fn builtin_font(name: &str) -> Result<BuiltinFont> {
     let font = match name.to_ascii_lowercase().as_str() {
         "helvetica" | "sans-serif" => BuiltinFont::Helvetica,
         "helvetica-bold" => BuiltinFont::HelveticaBold,
@@ -228,9 +336,11 @@ fn points_to_mm(points: f32) -> Mm {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use print_forge_engine::{
         DrawCommand, ImageCommand, LineCommand, LineDash, Point, Rect, ResolvedCommand,
-        ResolvedDocument, ResolvedPage, TextCommand,
+        ResolvedDocument, ResolvedFont, ResolvedPage, TextCommand, TextLine,
     };
     use printpdf::{PdfDocument, PdfParseOptions};
 
@@ -253,10 +363,17 @@ mod tests {
                                 width: 180.0,
                                 height: 18.0,
                             },
-                            value: "Ada Lovelace".to_owned(),
+                            lines: vec![TextLine {
+                                value: "Ada Lovelace".to_owned(),
+                                x: 36.0,
+                                y: 96.0,
+                                word_spacing_pt: 0.0,
+                            }],
                             font_size_pt: 16.0,
-                            font: None,
+                            line_height_pt: 19.2,
+                            font: ResolvedFont::Builtin("helvetica".to_owned()),
                             color: "#112233".to_owned(),
+                            clip: false,
                         }),
                     },
                     ResolvedCommand {
@@ -297,7 +414,8 @@ mod tests {
                             width: 50.0,
                             height: 50.0,
                         },
-                        source: "logo.png".to_owned(),
+                        source: PathBuf::from("logo.png"),
+                        fit: print_forge_template::ImageFit::Contain,
                     }),
                 }],
             }],

@@ -204,3 +204,43 @@ fn warns_when_an_element_exceeds_the_page_and_bleed() {
     assert_eq!(diagnostic.severity, Severity::Warning);
     assert_eq!(diagnostic.path, "pages[0].elements[0].position");
 }
+
+#[test]
+fn rejects_invalid_font_and_text_layout_settings() {
+    let template = template(
+        r#"{
+          "name": "Invalid typography",
+          "document": {
+            "width": { "value": 100, "unit": "points" },
+            "height": { "value": 100, "unit": "points" }
+          },
+          "fonts": [
+            { "name": "Fixture", "regular": "" },
+            { "name": "Fixture", "regular": "font.ttf" }
+          ],
+          "pages": [{
+            "elements": [{
+              "type": "text",
+              "position": {
+                "x": { "value": 10, "unit": "points" },
+                "y": { "value": 10, "unit": "points" },
+                "width": { "value": 80, "unit": "points" },
+                "height": { "value": 20, "unit": "points" }
+              },
+              "value": "text",
+              "font_size": { "value": 10, "unit": "points" },
+              "line_height": { "value": 0, "unit": "points" },
+              "min_font_size": { "value": 12, "unit": "points" }
+            }]
+          }]
+        }"#,
+    );
+
+    let report = validate_template(&template);
+    let codes: Vec<_> = report.errors().map(|diagnostic| diagnostic.code).collect();
+
+    assert!(codes.contains(&"font.empty_source"));
+    assert!(codes.contains(&"font.duplicate_name"));
+    assert!(codes.contains(&"value.not_positive"));
+    assert!(codes.contains(&"text.invalid_min_font_size"));
+}

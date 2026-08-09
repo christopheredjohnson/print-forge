@@ -10,6 +10,7 @@ print-forge-dataset.workspace = true
 print-forge-template.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+ttf-parser.workspace = true
 
 [lints]
 workspace = true
