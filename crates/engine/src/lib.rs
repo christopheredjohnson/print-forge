@@ -7,8 +7,8 @@ use std::{
 };
 
 use print_forge_template::{
-    Color, DashStyle, DocumentMetadata, Element, FontFamily, FontStyle, ImageFit, Stroke, Template,
-    TextAlign, TextOverflow,
+    Color, DashStyle, DocumentMetadata, Element, FlowOverflow, FontFamily, FontStyle, ImageFit,
+    StackDirection, StackElement, Stroke, Template, TextAlign, TextOverflow,
 };
 use thiserror::Error;
 
@@ -110,6 +110,20 @@ pub struct Rect {
     pub height: f32,
 }
 
+/// The available space supplied to an element during flow measurement.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MeasureConstraints {
+    pub max_width: f32,
+    pub max_height: f32,
+}
+
+/// The space requested by an element before final coordinates are assigned.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MeasuredSize {
+    pub width: f32,
+    pub height: f32,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct StrokeCommand {
     pub width_pt: f32,
@@ -142,10 +156,7 @@ impl Default for LayoutOptions {
     }
 }
 
-/// Absolute-position layout for the first renderer vertical slice.
-///
-/// Flow elements remain explicit errors so unsupported template content is
-/// never silently omitted from output.
+/// Renderer-independent absolute and flow layout engine.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct BasicLayoutEngine;
 
@@ -171,33 +182,12 @@ impl BasicLayoutEngine {
             });
         }
 
-        let pages = template
-            .pages
-            .iter()
-            .enumerate()
-            .map(|(page_index, page)| {
-                let commands = page
-                    .elements
-                    .iter()
-                    .enumerate()
-                    .map(|(element_index, element)| {
-                        let source_path = format!("pages[{page_index}].elements[{element_index}]");
-                        layout_element(element, template, data, options)
-                            .map(|command| ResolvedCommand {
-                                source_path: source_path.clone(),
-                                command,
-                            })
-                            .map_err(|source| LayoutError::Element {
-                                page_index,
-                                element_path: source_path,
-                                source,
-                            })
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-
-                Ok(ResolvedPage { commands })
-            })
-            .collect::<Result<Vec<_>, LayoutError>>()?;
+        let mut pages = Vec::new();
+        for (page_index, page) in template.pages.iter().enumerate() {
+            pages.extend(layout_template_page(
+                page_index, page, template, data, options,
+            )?);
+        }
 
         Ok(ResolvedDocument {
             title: template.name.clone(),
@@ -213,19 +203,598 @@ impl BasicLayoutEngine {
     }
 }
 
-fn layout_element(
+fn layout_template_page(
+    page_index: usize,
+    page: &print_forge_template::Page,
+    template: &Template,
+    data: &DataRow,
+    options: &LayoutOptions,
+) -> Result<Vec<ResolvedPage>, LayoutError> {
+    let repeating = layout_repeating_elements(page_index, page, template, data, options)?;
+    let mut pages = vec![ResolvedPage {
+        commands: repeating.clone(),
+    }];
+
+    for (element_index, element) in page.elements.iter().enumerate() {
+        let source_path = format!("pages[{page_index}].elements[{element_index}]");
+        match element {
+            Element::PageBreak => pages.push(ResolvedPage {
+                commands: repeating.clone(),
+            }),
+            Element::Stack(stack) => {
+                let flow_pages = layout_flow_stack(stack, &source_path, template, data, options)
+                    .map_err(|source| layout_error(page_index, &source_path, source))?;
+                for (continuation, commands) in flow_pages.into_iter().enumerate() {
+                    if continuation > 0 {
+                        pages.push(ResolvedPage {
+                            commands: repeating.clone(),
+                        });
+                    }
+                    pages
+                        .last_mut()
+                        .expect("page exists")
+                        .commands
+                        .extend(commands);
+                }
+            }
+            _ => {
+                let command = layout_element_at(element, None, template, data, options)
+                    .map_err(|source| layout_error(page_index, &source_path, source))?;
+                pages
+                    .last_mut()
+                    .expect("page exists")
+                    .commands
+                    .push(ResolvedCommand {
+                        source_path,
+                        command,
+                    });
+            }
+        }
+    }
+
+    Ok(pages)
+}
+
+fn layout_repeating_elements(
+    page_index: usize,
+    page: &print_forge_template::Page,
+    template: &Template,
+    data: &DataRow,
+    options: &LayoutOptions,
+) -> Result<Vec<ResolvedCommand>, LayoutError> {
+    let mut commands = Vec::new();
+    for (section, elements) in [("header", &page.header), ("footer", &page.footer)] {
+        for (element_index, element) in elements.iter().enumerate() {
+            let source_path = format!("pages[{page_index}].{section}[{element_index}]");
+            match element {
+                Element::PageBreak => {
+                    return Err(layout_error(
+                        page_index,
+                        &source_path,
+                        ElementLayoutError::InvalidLayout(
+                            "page breaks are not allowed in repeating headers or footers"
+                                .to_owned(),
+                        ),
+                    ));
+                }
+                Element::Stack(stack) => {
+                    let mut flow_pages =
+                        layout_flow_stack(stack, &source_path, template, data, options)
+                            .map_err(|source| layout_error(page_index, &source_path, source))?;
+                    if flow_pages.len() != 1 {
+                        return Err(layout_error(
+                            page_index,
+                            &source_path,
+                            ElementLayoutError::InvalidLayout(
+                                "repeating headers and footers cannot paginate".to_owned(),
+                            ),
+                        ));
+                    }
+                    commands.append(&mut flow_pages[0]);
+                }
+                _ => {
+                    let command = layout_element_at(element, None, template, data, options)
+                        .map_err(|source| layout_error(page_index, &source_path, source))?;
+                    commands.push(ResolvedCommand {
+                        source_path,
+                        command,
+                    });
+                }
+            }
+        }
+    }
+    Ok(commands)
+}
+
+fn layout_error(page_index: usize, element_path: &str, source: ElementLayoutError) -> LayoutError {
+    LayoutError::Element {
+        page_index,
+        element_path: element_path.to_owned(),
+        source,
+    }
+}
+
+fn layout_flow_stack(
+    stack: &StackElement,
+    source_path: &str,
+    template: &Template,
+    data: &DataRow,
+    options: &LayoutOptions,
+) -> Result<Vec<Vec<ResolvedCommand>>, ElementLayoutError> {
+    validate_stack_options(stack)?;
+    let bounds = stack
+        .position
+        .as_ref()
+        .map(resolve_bounds)
+        .ok_or_else(|| missing_position("stack"))?;
+    validate_flow_rect(bounds, "stack bounds")?;
+
+    if stack.keep_together {
+        if stack
+            .children
+            .iter()
+            .any(|element| matches!(element, Element::PageBreak))
+        {
+            return Err(ElementLayoutError::InvalidLayout(
+                "a keep-together stack cannot contain an explicit page break".to_owned(),
+            ));
+        }
+        return layout_stack_in_bounds(stack, bounds, source_path, template, data, options)
+            .map(|commands| vec![commands]);
+    }
+
+    match stack.direction {
+        StackDirection::Vertical => {
+            paginate_vertical_stack(stack, bounds, source_path, template, data, options)
+        }
+        StackDirection::Horizontal => {
+            layout_stack_in_bounds(stack, bounds, source_path, template, data, options)
+                .map(|commands| vec![commands])
+        }
+    }
+}
+
+fn paginate_vertical_stack(
+    stack: &StackElement,
+    bounds: Rect,
+    source_path: &str,
+    template: &Template,
+    data: &DataRow,
+    options: &LayoutOptions,
+) -> Result<Vec<Vec<ResolvedCommand>>, ElementLayoutError> {
+    let content = inset_rect(bounds, stack.padding.to_points())?;
+    let constraints = MeasureConstraints {
+        max_width: content.width,
+        max_height: content.height,
+    };
+    let gap = stack.gap.to_points();
+    let mut pages = vec![Vec::new()];
+    let mut cursor_top = content.y + content.height;
+    let mut items_on_page = 0_usize;
+
+    for (index, child) in stack.children.iter().enumerate() {
+        let child_path = format!("{source_path}.children[{index}]");
+        if matches!(child, Element::PageBreak) {
+            pages.push(Vec::new());
+            cursor_top = content.y + content.height;
+            items_on_page = 0;
+            continue;
+        }
+
+        let size = measure_element(
+            child,
+            constraints,
+            StackDirection::Vertical,
+            template,
+            data,
+            options,
+        )?;
+        ensure_measured_size_fits(size, constraints, &child_path)?;
+        let required = size.height + if items_on_page == 0 { 0.0 } else { gap };
+        let remaining = cursor_top - content.y;
+
+        if required > remaining + 0.01 {
+            if stack.overflow == FlowOverflow::Error {
+                return Err(ElementLayoutError::InvalidLayout(format!(
+                    "{child_path} exceeds the stack region and overflow is set to error"
+                )));
+            }
+            if items_on_page < stack.orphans {
+                return Err(ElementLayoutError::InvalidLayout(format!(
+                    "automatic page break would leave {items_on_page} flow item(s) before the break; stack requires at least {} orphan item(s)",
+                    stack.orphans
+                )));
+            }
+            pages.push(Vec::new());
+            cursor_top = content.y + content.height;
+            items_on_page = 0;
+        }
+
+        if items_on_page > 0 {
+            cursor_top -= gap;
+        }
+        let child_bounds = Rect {
+            x: content.x,
+            y: cursor_top - size.height,
+            width: size.width,
+            height: size.height,
+        };
+        let mut commands =
+            layout_flow_element(child, child_bounds, &child_path, template, data, options)?;
+        pages.last_mut().expect("page exists").append(&mut commands);
+        cursor_top -= size.height;
+        items_on_page += 1;
+    }
+
+    Ok(pages)
+}
+
+fn layout_stack_in_bounds(
+    stack: &StackElement,
+    bounds: Rect,
+    source_path: &str,
+    template: &Template,
+    data: &DataRow,
+    options: &LayoutOptions,
+) -> Result<Vec<ResolvedCommand>, ElementLayoutError> {
+    validate_stack_options(stack)?;
+    let content = inset_rect(bounds, stack.padding.to_points())?;
+    let gap = stack.gap.to_points();
+    let mut commands = Vec::new();
+
+    match stack.direction {
+        StackDirection::Vertical => {
+            let constraints = MeasureConstraints {
+                max_width: content.width,
+                max_height: content.height,
+            };
+            let mut cursor_top = content.y + content.height;
+            for (index, child) in stack.children.iter().enumerate() {
+                let child_path = format!("{source_path}.children[{index}]");
+                if matches!(child, Element::PageBreak) {
+                    return Err(ElementLayoutError::InvalidLayout(
+                        "page breaks are only supported by paginating vertical stacks".to_owned(),
+                    ));
+                }
+                let size = measure_element(
+                    child,
+                    constraints,
+                    StackDirection::Vertical,
+                    template,
+                    data,
+                    options,
+                )?;
+                ensure_measured_size_fits(size, constraints, &child_path)?;
+                if index > 0 {
+                    cursor_top -= gap;
+                }
+                if cursor_top - size.height < content.y - 0.01 {
+                    return Err(ElementLayoutError::InvalidLayout(format!(
+                        "{child_path} exceeds its non-paginating stack bounds"
+                    )));
+                }
+                let child_bounds = Rect {
+                    x: content.x,
+                    y: cursor_top - size.height,
+                    width: size.width,
+                    height: size.height,
+                };
+                commands.extend(layout_flow_element(
+                    child,
+                    child_bounds,
+                    &child_path,
+                    template,
+                    data,
+                    options,
+                )?);
+                cursor_top -= size.height;
+            }
+        }
+        StackDirection::Horizontal => {
+            let mut cursor_x = content.x;
+            for (index, child) in stack.children.iter().enumerate() {
+                let child_path = format!("{source_path}.children[{index}]");
+                if matches!(child, Element::PageBreak) {
+                    return Err(ElementLayoutError::InvalidLayout(
+                        "page breaks are not valid in horizontal stacks".to_owned(),
+                    ));
+                }
+                if index > 0 {
+                    cursor_x += gap;
+                }
+                let constraints = MeasureConstraints {
+                    max_width: (content.x + content.width - cursor_x).max(0.0),
+                    max_height: content.height,
+                };
+                let size = measure_element(
+                    child,
+                    constraints,
+                    StackDirection::Horizontal,
+                    template,
+                    data,
+                    options,
+                )?;
+                ensure_measured_size_fits(size, constraints, &child_path)?;
+                let child_bounds = Rect {
+                    x: cursor_x,
+                    y: content.y + content.height - size.height,
+                    width: size.width,
+                    height: size.height,
+                };
+                commands.extend(layout_flow_element(
+                    child,
+                    child_bounds,
+                    &child_path,
+                    template,
+                    data,
+                    options,
+                )?);
+                cursor_x += size.width;
+            }
+        }
+    }
+
+    Ok(commands)
+}
+
+fn measure_element(
     element: &Element,
+    constraints: MeasureConstraints,
+    parent_direction: StackDirection,
+    template: &Template,
+    data: &DataRow,
+    options: &LayoutOptions,
+) -> Result<MeasuredSize, ElementLayoutError> {
+    validate_constraints(constraints)?;
+    match element {
+        Element::Text(text) => {
+            if let Some(position) = &text.position {
+                return Ok(measured_bounds(position));
+            }
+            if parent_direction == StackDirection::Horizontal {
+                return Err(ElementLayoutError::InvalidLayout(
+                    "horizontal stack children require position width and height size hints"
+                        .to_owned(),
+                ));
+            }
+            let value = resolve_string(&text.value, data)?;
+            let font = resolve_font(template, text.font.as_deref(), text.font_style, options)?;
+            let metrics = FontMetrics::load(&font)?;
+            let font_size = text.font_size.to_points();
+            let line_height = text
+                .line_height
+                .map_or(font_size * 1.2, |value| value.to_points());
+            let lines = wrap_text(&value, constraints.max_width, font_size, &metrics);
+            Ok(MeasuredSize {
+                width: constraints.max_width,
+                height: lines.len() as f32 * line_height,
+            })
+        }
+        Element::Image(image) => image
+            .position
+            .as_ref()
+            .map(measured_bounds)
+            .ok_or_else(|| flow_size_hint_missing("image")),
+        Element::Rectangle(rectangle) => rectangle
+            .position
+            .as_ref()
+            .map(measured_bounds)
+            .ok_or_else(|| flow_size_hint_missing("rectangle")),
+        Element::Svg(svg) => svg
+            .position
+            .as_ref()
+            .map(measured_bounds)
+            .ok_or_else(|| flow_size_hint_missing("svg")),
+        Element::Stack(stack) => {
+            if let Some(position) = &stack.position {
+                Ok(measured_bounds(position))
+            } else {
+                measure_stack(stack, constraints, template, data, options)
+            }
+        }
+        Element::Line(_) => Err(ElementLayoutError::InvalidLayout(
+            "line elements use absolute coordinates and cannot be flow children".to_owned(),
+        )),
+        Element::QrCode(_) => Err(ElementLayoutError::UnsupportedElement("qr_code")),
+        Element::Group(_) => Err(ElementLayoutError::UnsupportedElement("group")),
+        Element::Table(_) => Err(ElementLayoutError::UnsupportedElement("table")),
+        Element::Repeater(_) => Err(ElementLayoutError::UnsupportedElement("repeater")),
+        Element::PageBreak => Err(ElementLayoutError::InvalidLayout(
+            "page breaks cannot be measured as flow items".to_owned(),
+        )),
+    }
+}
+
+fn measure_stack(
+    stack: &StackElement,
+    constraints: MeasureConstraints,
+    template: &Template,
+    data: &DataRow,
+    options: &LayoutOptions,
+) -> Result<MeasuredSize, ElementLayoutError> {
+    validate_stack_options(stack)?;
+    let padding = stack.padding.to_points();
+    let inner = MeasureConstraints {
+        max_width: constraints.max_width - padding * 2.0,
+        max_height: constraints.max_height - padding * 2.0,
+    };
+    validate_constraints(inner)?;
+    let gap = stack.gap.to_points();
+    let mut width = 0.0_f32;
+    let mut height = 0.0_f32;
+    let mut count = 0_usize;
+
+    for child in &stack.children {
+        if matches!(child, Element::PageBreak) {
+            return Err(ElementLayoutError::InvalidLayout(
+                "nested stacks cannot contain page breaks".to_owned(),
+            ));
+        }
+        let child_constraints = match stack.direction {
+            StackDirection::Vertical => inner,
+            StackDirection::Horizontal => MeasureConstraints {
+                max_width: (inner.max_width - width - gap * count as f32).max(0.0),
+                max_height: inner.max_height,
+            },
+        };
+        let child_size = measure_element(
+            child,
+            child_constraints,
+            stack.direction,
+            template,
+            data,
+            options,
+        )?;
+        match stack.direction {
+            StackDirection::Vertical => {
+                width = width.max(child_size.width);
+                height += child_size.height;
+            }
+            StackDirection::Horizontal => {
+                width += child_size.width;
+                height = height.max(child_size.height);
+            }
+        }
+        count += 1;
+    }
+    if count > 1 {
+        match stack.direction {
+            StackDirection::Vertical => height += gap * (count - 1) as f32,
+            StackDirection::Horizontal => width += gap * (count - 1) as f32,
+        }
+    }
+
+    Ok(MeasuredSize {
+        width: width + padding * 2.0,
+        height: height + padding * 2.0,
+    })
+}
+
+fn layout_flow_element(
+    element: &Element,
+    bounds: Rect,
+    source_path: &str,
+    template: &Template,
+    data: &DataRow,
+    options: &LayoutOptions,
+) -> Result<Vec<ResolvedCommand>, ElementLayoutError> {
+    if let Element::Stack(stack) = element {
+        return layout_stack_in_bounds(stack, bounds, source_path, template, data, options);
+    }
+    let command = layout_element_at(element, Some(bounds), template, data, options)?;
+    Ok(vec![ResolvedCommand {
+        source_path: source_path.to_owned(),
+        command,
+    }])
+}
+
+fn measured_bounds(bounds: &print_forge_template::Bounds) -> MeasuredSize {
+    MeasuredSize {
+        width: bounds.width.to_points(),
+        height: bounds.height.to_points(),
+    }
+}
+
+fn inset_rect(bounds: Rect, padding: f32) -> Result<Rect, ElementLayoutError> {
+    if !padding.is_finite() || padding < 0.0 {
+        return Err(ElementLayoutError::InvalidLayout(
+            "stack padding must be nonnegative and finite".to_owned(),
+        ));
+    }
+    let content = Rect {
+        x: bounds.x + padding,
+        y: bounds.y + padding,
+        width: bounds.width - padding * 2.0,
+        height: bounds.height - padding * 2.0,
+    };
+    validate_flow_rect(content, "stack content bounds")?;
+    Ok(content)
+}
+
+fn validate_flow_rect(bounds: Rect, label: &str) -> Result<(), ElementLayoutError> {
+    if !bounds.x.is_finite()
+        || !bounds.y.is_finite()
+        || !bounds.width.is_finite()
+        || !bounds.height.is_finite()
+        || bounds.width <= 0.0
+        || bounds.height <= 0.0
+    {
+        return Err(ElementLayoutError::InvalidLayout(format!(
+            "{label} must have finite coordinates and positive dimensions"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_constraints(constraints: MeasureConstraints) -> Result<(), ElementLayoutError> {
+    if !constraints.max_width.is_finite()
+        || !constraints.max_height.is_finite()
+        || constraints.max_width <= 0.0
+        || constraints.max_height <= 0.0
+    {
+        return Err(ElementLayoutError::InvalidLayout(
+            "flow measurement requires positive finite available width and height".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn ensure_measured_size_fits(
+    size: MeasuredSize,
+    constraints: MeasureConstraints,
+    source_path: &str,
+) -> Result<(), ElementLayoutError> {
+    if !size.width.is_finite()
+        || !size.height.is_finite()
+        || size.width <= 0.0
+        || size.height <= 0.0
+    {
+        return Err(ElementLayoutError::InvalidLayout(format!(
+            "{source_path} measured to invalid dimensions"
+        )));
+    }
+    if size.width > constraints.max_width + 0.01 || size.height > constraints.max_height + 0.01 {
+        return Err(ElementLayoutError::InvalidLayout(format!(
+            "{source_path} measures {:.2}pt by {:.2}pt but only {:.2}pt by {:.2}pt is available",
+            size.width, size.height, constraints.max_width, constraints.max_height
+        )));
+    }
+    Ok(())
+}
+
+fn flow_size_hint_missing(element: &str) -> ElementLayoutError {
+    ElementLayoutError::InvalidLayout(format!(
+        "flow {element} elements require position width and height as size hints"
+    ))
+}
+
+fn validate_stack_options(stack: &StackElement) -> Result<(), ElementLayoutError> {
+    let gap = stack.gap.to_points();
+    if !gap.is_finite() || gap < 0.0 {
+        return Err(ElementLayoutError::InvalidLayout(
+            "stack gap must be nonnegative and finite".to_owned(),
+        ));
+    }
+    if stack.orphans == 0 {
+        return Err(ElementLayoutError::InvalidLayout(
+            "stack orphans must be at least 1".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn layout_element_at(
+    element: &Element,
+    assigned_bounds: Option<Rect>,
     template: &Template,
     data: &DataRow,
     options: &LayoutOptions,
 ) -> Result<DrawCommand, ElementLayoutError> {
     match element {
         Element::Text(text) => {
-            let bounds = text
-                .position
-                .as_ref()
+            let bounds = assigned_bounds
+                .or_else(|| text.position.as_ref().map(resolve_bounds))
                 .ok_or_else(|| missing_position("text"))?;
-            let bounds = resolve_bounds(bounds);
             let value = resolve_string(&text.value, data)?;
             let font = resolve_font(template, text.font.as_deref(), text.font_style, options)?;
             let metrics = FontMetrics::load(&font)?;
@@ -260,13 +829,12 @@ fn layout_element(
             }))
         }
         Element::Image(image) => {
-            let bounds = image
-                .position
-                .as_ref()
+            let bounds = assigned_bounds
+                .or_else(|| image.position.as_ref().map(resolve_bounds))
                 .ok_or_else(|| missing_position("image"))?;
 
             Ok(DrawCommand::Image(ImageCommand {
-                bounds: resolve_bounds(bounds),
+                bounds,
                 source: resolve_asset_path(
                     &options.asset_base,
                     &resolve_string(&image.source, data)?,
@@ -275,47 +843,56 @@ fn layout_element(
             }))
         }
         Element::Rectangle(rectangle) => {
-            let bounds = rectangle
-                .position
-                .as_ref()
+            let bounds = assigned_bounds
+                .or_else(|| rectangle.position.as_ref().map(resolve_bounds))
                 .ok_or_else(|| missing_position("rectangle"))?;
 
             Ok(DrawCommand::Rectangle(RectangleCommand {
-                bounds: resolve_bounds(bounds),
+                bounds,
                 fill: rectangle.fill.as_deref().map(resolve_color).transpose()?,
                 stroke: rectangle.stroke.as_ref().map(resolve_stroke).transpose()?,
             }))
         }
-        Element::Line(line) => Ok(DrawCommand::Line(LineCommand {
-            start: Point {
-                x: line.x1.to_points(),
-                y: line.y1.to_points(),
-            },
-            end: Point {
-                x: line.x2.to_points(),
-                y: line.y2.to_points(),
-            },
-            width_pt: line.width.to_points(),
-            color: resolve_color(&line.color)?,
-            dash: resolve_dash(line.dash),
-        })),
+        Element::Line(line) => {
+            if assigned_bounds.is_some() {
+                return Err(ElementLayoutError::InvalidLayout(
+                    "line elements use absolute coordinates and cannot be flow children".to_owned(),
+                ));
+            }
+            Ok(DrawCommand::Line(LineCommand {
+                start: Point {
+                    x: line.x1.to_points(),
+                    y: line.y1.to_points(),
+                },
+                end: Point {
+                    x: line.x2.to_points(),
+                    y: line.y2.to_points(),
+                },
+                width_pt: line.width.to_points(),
+                color: resolve_color(&line.color)?,
+                dash: resolve_dash(line.dash),
+            }))
+        }
         Element::Svg(svg) => {
-            let bounds = svg
-                .position
-                .as_ref()
+            let bounds = assigned_bounds
+                .or_else(|| svg.position.as_ref().map(resolve_bounds))
                 .ok_or_else(|| missing_position("svg"))?;
 
             Ok(DrawCommand::Svg(SvgCommand {
-                bounds: resolve_bounds(bounds),
+                bounds,
                 source: resolve_string(&svg.source, data)?,
             }))
         }
         Element::QrCode(_) => Err(ElementLayoutError::UnsupportedElement("qr_code")),
         Element::Group(_) => Err(ElementLayoutError::UnsupportedElement("group")),
-        Element::Stack(_) => Err(ElementLayoutError::UnsupportedElement("stack")),
+        Element::Stack(_) => Err(ElementLayoutError::InvalidLayout(
+            "stack elements must be laid out through the flow layout contract".to_owned(),
+        )),
         Element::Table(_) => Err(ElementLayoutError::UnsupportedElement("table")),
         Element::Repeater(_) => Err(ElementLayoutError::UnsupportedElement("repeater")),
-        Element::PageBreak => Err(ElementLayoutError::UnsupportedElement("page_break")),
+        Element::PageBreak => Err(ElementLayoutError::InvalidLayout(
+            "page breaks are only valid between flow items".to_owned(),
+        )),
     }
 }
 
@@ -746,7 +1323,7 @@ mod tests {
     use std::path::PathBuf;
 
     use print_forge_dataset::DataRow;
-    use print_forge_template::{Template, TextAlign, TextOverflow};
+    use print_forge_template::{Element, FlowOverflow, Template, TextAlign, TextOverflow};
     use serde_json::json;
 
     use super::{
@@ -892,6 +1469,302 @@ mod tests {
             image
                 .source
                 .ends_with("examples/assets/images/layout-fixture.png")
+        );
+    }
+
+    #[test]
+    fn paginates_vertical_flow_and_repeats_header_and_footer() {
+        let template: Template = serde_json::from_str(
+            r##"{
+              "name": "Paginated flow",
+              "document": {
+                "width": { "value": 200, "unit": "points" },
+                "height": { "value": 200, "unit": "points" }
+              },
+              "pages": [{
+                "header": [{
+                  "type": "text",
+                  "position": {
+                    "x": { "value": 10, "unit": "points" },
+                    "y": { "value": 180, "unit": "points" },
+                    "width": { "value": 180, "unit": "points" },
+                    "height": { "value": 12, "unit": "points" }
+                  },
+                  "value": "Repeated header",
+                  "font_size": { "value": 10, "unit": "points" }
+                }],
+                "footer": [{
+                  "type": "text",
+                  "position": {
+                    "x": { "value": 10, "unit": "points" },
+                    "y": { "value": 5, "unit": "points" },
+                    "width": { "value": 180, "unit": "points" },
+                    "height": { "value": 12, "unit": "points" }
+                  },
+                  "value": "Repeated footer",
+                  "font_size": { "value": 10, "unit": "points" }
+                }],
+                "elements": [
+                  {
+                    "type": "rectangle",
+                    "position": {
+                      "x": { "value": 2, "unit": "points" },
+                      "y": { "value": 2, "unit": "points" },
+                      "width": { "value": 4, "unit": "points" },
+                      "height": { "value": 4, "unit": "points" }
+                    },
+                    "fill": "#000000"
+                  },
+                  {
+                    "type": "stack",
+                    "position": {
+                      "x": { "value": 10, "unit": "points" },
+                      "y": { "value": 30, "unit": "points" },
+                      "width": { "value": 180, "unit": "points" },
+                      "height": { "value": 140, "unit": "points" }
+                    },
+                    "gap": { "value": 5, "unit": "points" },
+                    "padding": { "value": 5, "unit": "points" },
+                    "orphans": 1,
+                    "children": [
+                      { "type": "rectangle", "position": { "x": { "value": 0, "unit": "points" }, "y": { "value": 0, "unit": "points" }, "width": { "value": 170, "unit": "points" }, "height": { "value": 50, "unit": "points" } }, "fill": "#111111" },
+                      { "type": "rectangle", "position": { "x": { "value": 0, "unit": "points" }, "y": { "value": 0, "unit": "points" }, "width": { "value": 170, "unit": "points" }, "height": { "value": 50, "unit": "points" } }, "fill": "#222222" },
+                      { "type": "rectangle", "position": { "x": { "value": 0, "unit": "points" }, "y": { "value": 0, "unit": "points" }, "width": { "value": 170, "unit": "points" }, "height": { "value": 50, "unit": "points" } }, "fill": "#333333" },
+                      { "type": "rectangle", "position": { "x": { "value": 0, "unit": "points" }, "y": { "value": 0, "unit": "points" }, "width": { "value": 170, "unit": "points" }, "height": { "value": 50, "unit": "points" } }, "fill": "#444444" },
+                      { "type": "rectangle", "position": { "x": { "value": 0, "unit": "points" }, "y": { "value": 0, "unit": "points" }, "width": { "value": 170, "unit": "points" }, "height": { "value": 50, "unit": "points" } }, "fill": "#555555" }
+                    ]
+                  }
+                ]
+              }]
+            }"##,
+        )
+        .unwrap();
+
+        let document = BasicLayoutEngine
+            .layout(&template, &DataRow::new())
+            .unwrap();
+
+        assert_eq!(document.pages.len(), 3);
+        assert!(document.pages.iter().all(|page| {
+            page.commands
+                .iter()
+                .any(|command| command.source_path.contains(".header[0]"))
+                && page
+                    .commands
+                    .iter()
+                    .any(|command| command.source_path.contains(".footer[0]"))
+        }));
+        assert!(
+            document.pages[1]
+                .commands
+                .iter()
+                .all(|command| command.source_path != "pages[0].elements[0]")
+        );
+
+        let flow_rectangles = document.pages[0]
+            .commands
+            .iter()
+            .filter(|command| command.source_path.contains(".children["))
+            .filter_map(|command| match &command.command {
+                DrawCommand::Rectangle(rectangle) => Some(rectangle.bounds),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(flow_rectangles.len(), 2);
+        assert_eq!(
+            flow_rectangles[0],
+            Rect {
+                x: 15.0,
+                y: 115.0,
+                width: 170.0,
+                height: 50.0
+            }
+        );
+        assert_eq!(flow_rectangles[1].y, 60.0);
+    }
+
+    #[test]
+    fn lays_out_horizontal_stacks_with_gap_and_padding() {
+        let template: Template = serde_json::from_str(
+            r##"{
+              "name": "Horizontal flow",
+              "document": {
+                "width": { "value": 200, "unit": "points" },
+                "height": { "value": 150, "unit": "points" }
+              },
+              "pages": [{ "elements": [{
+                "type": "stack",
+                "direction": "horizontal",
+                "position": {
+                  "x": { "value": 10, "unit": "points" },
+                  "y": { "value": 40, "unit": "points" },
+                  "width": { "value": 180, "unit": "points" },
+                  "height": { "value": 80, "unit": "points" }
+                },
+                "gap": { "value": 10, "unit": "points" },
+                "padding": { "value": 10, "unit": "points" },
+                "children": [
+                  { "type": "rectangle", "position": { "x": { "value": 99, "unit": "points" }, "y": { "value": 99, "unit": "points" }, "width": { "value": 40, "unit": "points" }, "height": { "value": 20, "unit": "points" } }, "fill": "#111111" },
+                  { "type": "rectangle", "position": { "x": { "value": 99, "unit": "points" }, "y": { "value": 99, "unit": "points" }, "width": { "value": 60, "unit": "points" }, "height": { "value": 30, "unit": "points" } }, "fill": "#222222" }
+                ]
+              }] }]
+            }"##,
+        )
+        .unwrap();
+
+        let document = BasicLayoutEngine
+            .layout(&template, &DataRow::new())
+            .unwrap();
+        let rectangles = document.pages[0]
+            .commands
+            .iter()
+            .filter_map(|command| match &command.command {
+                DrawCommand::Rectangle(rectangle) => Some(rectangle.bounds),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            rectangles[0],
+            Rect {
+                x: 20.0,
+                y: 90.0,
+                width: 40.0,
+                height: 20.0
+            }
+        );
+        assert_eq!(
+            rectangles[1],
+            Rect {
+                x: 70.0,
+                y: 80.0,
+                width: 60.0,
+                height: 30.0
+            }
+        );
+    }
+
+    #[test]
+    fn measures_unpositioned_text_in_a_vertical_flow() {
+        let template: Template = serde_json::from_str(
+            r##"{
+              "name": "Measured text",
+              "document": {
+                "width": { "value": 120, "unit": "points" },
+                "height": { "value": 120, "unit": "points" }
+              },
+              "pages": [{ "elements": [{
+                "type": "stack",
+                "position": {
+                  "x": { "value": 10, "unit": "points" },
+                  "y": { "value": 10, "unit": "points" },
+                  "width": { "value": 100, "unit": "points" },
+                  "height": { "value": 100, "unit": "points" }
+                },
+                "padding": { "value": 10, "unit": "points" },
+                "children": [{
+                  "type": "text",
+                  "value": "Measured flow text wraps to the available width",
+                  "font_size": { "value": 10, "unit": "points" },
+                  "line_height": { "value": 12, "unit": "points" }
+                }]
+              }] }]
+            }"##,
+        )
+        .unwrap();
+
+        let document = BasicLayoutEngine
+            .layout(&template, &DataRow::new())
+            .unwrap();
+        let DrawCommand::Text(text) = &document.pages[0].commands[0].command else {
+            panic!("expected text command");
+        };
+
+        assert_eq!(text.bounds.x, 20.0);
+        assert_eq!(text.bounds.width, 80.0);
+        assert_eq!(text.bounds.height, text.lines.len() as f32 * 12.0);
+        assert!(text.lines.len() > 1);
+    }
+
+    #[test]
+    fn honors_explicit_breaks_and_rejects_unsafe_break_policies() {
+        let explicit: Template = serde_json::from_str(
+            r##"{
+              "name": "Explicit break",
+              "document": {
+                "width": { "value": 100, "unit": "points" },
+                "height": { "value": 100, "unit": "points" }
+              },
+              "pages": [{ "elements": [{
+                "type": "stack",
+                "position": {
+                  "x": { "value": 10, "unit": "points" },
+                  "y": { "value": 10, "unit": "points" },
+                  "width": { "value": 80, "unit": "points" },
+                  "height": { "value": 80, "unit": "points" }
+                },
+                "children": [
+                  { "type": "rectangle", "position": { "x": { "value": 0, "unit": "points" }, "y": { "value": 0, "unit": "points" }, "width": { "value": 80, "unit": "points" }, "height": { "value": 20, "unit": "points" } }, "fill": "#111111" },
+                  { "type": "page_break" },
+                  { "type": "rectangle", "position": { "x": { "value": 0, "unit": "points" }, "y": { "value": 0, "unit": "points" }, "width": { "value": 80, "unit": "points" }, "height": { "value": 20, "unit": "points" } }, "fill": "#222222" }
+                ]
+              }] }]
+            }"##,
+        )
+        .unwrap();
+        assert_eq!(
+            BasicLayoutEngine
+                .layout(&explicit, &DataRow::new())
+                .unwrap()
+                .pages
+                .len(),
+            2
+        );
+
+        let mut keep_together = explicit.clone();
+        let Element::Stack(stack) = &mut keep_together.pages[0].elements[0] else {
+            unreachable!();
+        };
+        stack.keep_together = true;
+        assert!(
+            BasicLayoutEngine
+                .layout(&keep_together, &DataRow::new())
+                .unwrap_err()
+                .to_string()
+                .contains("keep-together")
+        );
+
+        let mut orphaned = explicit;
+        let Element::Stack(stack) = &mut orphaned.pages[0].elements[0] else {
+            unreachable!();
+        };
+        stack.children.remove(1);
+        for child in &mut stack.children {
+            let Element::Rectangle(rectangle) = child else {
+                unreachable!()
+            };
+            rectangle.position.as_mut().unwrap().height.value = 60.0;
+        }
+        stack.orphans = 2;
+        assert!(
+            BasicLayoutEngine
+                .layout(&orphaned, &DataRow::new())
+                .unwrap_err()
+                .to_string()
+                .contains("orphan item")
+        );
+
+        let Element::Stack(stack) = &mut orphaned.pages[0].elements[0] else {
+            unreachable!();
+        };
+        stack.orphans = 1;
+        stack.overflow = FlowOverflow::Error;
+        assert!(
+            BasicLayoutEngine
+                .layout(&orphaned, &DataRow::new())
+                .unwrap_err()
+                .to_string()
+                .contains("overflow is set to error")
         );
     }
 }

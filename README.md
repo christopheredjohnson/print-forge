@@ -27,6 +27,7 @@ cargo run -- validate examples/business-card.json
 cargo run -- validate examples/business-card.json --dataset examples/people.csv
 cargo run -- render examples/business-card.json examples/people.csv output/pdf/business-cards.pdf
 cargo run -- render examples/absolute-layout.json examples/absolute-layout-data.json output/pdf/absolute-layout.pdf
+cargo run -- render examples/flow-layout.json examples/flow-layout-data.json output/pdf/flow-layout.pdf
 cargo test --workspace
 ```
 
@@ -94,10 +95,40 @@ fields are `title`, `author`, `subject`, `keywords`, and `identifier`. When no
 identifier is supplied, Print Forge derives a stable one from the resolved
 document. Identical inputs produce byte-identical PDFs.
 
-The current renderer supports measured and wrapped absolute-positioned text,
-embedded font families, local PNG/JPEG images, rectangles, and lines. Asset
-paths are resolved relative to the template file. SVG, QR codes, and flow
-elements such as stacks and tables remain explicit implementation errors.
+## Flow layout and pagination
+
+A positioned `stack` defines a flow region that can coexist with absolute
+elements on the same template page. Vertical stacks place children from top to
+bottom and create continuation pages by default; horizontal stacks place one
+row from left to right. Both support uniform `padding` and inter-item `gap`.
+
+```sh
+cargo run -- render examples/flow-layout.json examples/flow-layout-data.json \
+  output/pdf/flow-layout.pdf
+```
+
+Within a flow stack, child `position.width` and `position.height` are size
+hints; `position.x` and `position.y` are ignored. Vertical text may omit its
+position and is measured from its resolved, wrapped content. Images,
+rectangles, SVGs, and horizontal text require size hints. Coordinate-based
+lines remain absolute elements.
+
+`overflow: "paginate"` is the default. `overflow: "error"` rejects content
+that needs an automatic continuation page. A `page_break` starts a continuation
+explicitly in a vertical stack or between top-level page elements.
+`keep_together: true` requires the entire stack to fit one page and cannot be
+combined with an explicit break. `orphans` defaults to 1 and sets the minimum
+number of flow items that must precede an automatic break.
+
+Each page may declare absolute-positioned `header` and `footer` arrays. Their
+commands are reused on every continuation page generated from that template
+page. Flow items are currently atomic across page boundaries; text and images
+are moved as units rather than split internally.
+
+The current renderer supports measured and wrapped text, embedded font
+families, local PNG/JPEG images, rectangles, lines, stacks, and pagination.
+Asset paths are resolved relative to the template file. SVG, QR codes, tables,
+groups, and repeaters remain explicit implementation errors.
 
 ## MVP roadmap
 
@@ -161,12 +192,12 @@ each priority before moving to the next unless an item is clearly independent.
 
 ### 5. Add flow layout and pagination
 
-- [ ] Introduce a measure/layout contract for elements.
-- [ ] Implement vertical and horizontal `stack` layout with gaps and padding.
-- [ ] Allow absolute and flow-layout regions on the same page.
-- [ ] Add automatic page creation and explicit page breaks.
-- [ ] Add reusable page headers and footers.
-- [ ] Define keep-together, orphan, and overflow behavior.
+- [x] Introduce a measure/layout contract for elements.
+- [x] Implement vertical and horizontal `stack` layout with gaps and padding.
+- [x] Allow absolute and flow-layout regions on the same page.
+- [x] Add automatic page creation and explicit page breaks.
+- [x] Add reusable page headers and footers.
+- [x] Define keep-together, orphan, and overflow behavior.
 
 ### 6. Implement MVP tables
 

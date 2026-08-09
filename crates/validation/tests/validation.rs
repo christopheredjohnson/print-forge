@@ -285,3 +285,53 @@ fn rejects_invalid_print_colors_and_empty_metadata() {
     assert!(paths.contains(&"pages[0].elements[0].fill"));
     assert!(paths.contains(&"pages[0].elements[0].stroke.color"));
 }
+
+#[test]
+fn rejects_invalid_flow_layout_contracts() {
+    let template = template(
+        r##"{
+          "name": "Invalid flow",
+          "document": {
+            "width": { "value": 100, "unit": "points" },
+            "height": { "value": 100, "unit": "points" }
+          },
+          "pages": [{
+            "header": [{ "type": "page_break" }],
+            "elements": [{
+              "type": "stack",
+              "direction": "horizontal",
+              "position": {
+                "x": { "value": 10, "unit": "points" },
+                "y": { "value": 10, "unit": "points" },
+                "width": { "value": 80, "unit": "points" },
+                "height": { "value": 40, "unit": "points" }
+              },
+              "padding": { "value": 20, "unit": "points" },
+              "orphans": 0,
+              "keep_together": true,
+              "children": [
+                {
+                  "type": "text",
+                  "value": "missing horizontal size",
+                  "font_size": { "value": 10, "unit": "points" }
+                },
+                { "type": "page_break" }
+              ]
+            }]
+          }]
+        }"##,
+    );
+
+    let report = validate_template(&template);
+    let codes = report
+        .errors()
+        .map(|diagnostic| diagnostic.code)
+        .collect::<Vec<_>>();
+
+    assert!(codes.contains(&"flow.page_break_in_repeating_content"));
+    assert!(codes.contains(&"flow.padding_exceeds_bounds"));
+    assert!(codes.contains(&"flow.invalid_orphans"));
+    assert!(codes.contains(&"flow.keep_together_page_break"));
+    assert!(codes.contains(&"flow.missing_size_hint"));
+    assert!(codes.contains(&"flow.page_break_in_horizontal_stack"));
+}
