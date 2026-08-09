@@ -10,7 +10,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use clap::{Args, ValueEnum};
 use print_forge_dataset::DataRow;
 use print_forge_engine::{BasicLayoutEngine, LayoutOptions, ResolvedDocument};
-use print_forge_pdf::{DocumentRenderer, PdfRenderer};
+use print_forge_pdf::{PdfRenderOptions, PdfRenderer, PdfXStandard};
 use print_forge_template::Template;
 use print_forge_validation::{validate_data_row, validate_dataset, validate_template};
 use serde::Serialize;
@@ -42,12 +42,37 @@ pub(crate) struct RenderArgs {
     /// Write a machine-readable JSON job summary to this path.
     #[arg(long, value_name = "PATH")]
     pub(crate) summary: Option<PathBuf>,
+    /// Enable PDF/X-4, 300 DPI images, and mandatory embedded fonts.
+    #[arg(long)]
+    pub(crate) print_ready: bool,
+    /// Reject images below this effective output resolution.
+    #[arg(long, value_name = "DPI")]
+    pub(crate) min_image_dpi: Option<f32>,
+    /// Reject built-in PDF fonts instead of accepting unembedded text fonts.
+    #[arg(long)]
+    pub(crate) require_embedded_fonts: bool,
+    /// Generate and validate against a PDF/X conformance target.
+    #[arg(long, value_enum, value_name = "TARGET")]
+    pub(crate) pdf_x: Option<PdfXTarget>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub(crate) enum OutputMode {
     Combined,
     Separate,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub(crate) enum PdfXTarget {
+    X4,
+}
+
+impl From<PdfXTarget> for PdfXStandard {
+    fn from(target: PdfXTarget) -> Self {
+        match target {
+            PdfXTarget::X4 => Self::X4,
+        }
+    }
 }
 
 impl OutputMode {
@@ -214,6 +239,7 @@ pub(crate) fn render(arguments: &RenderArgs) -> Result<()> {
     if arguments.summary.as_deref() == Some(arguments.output.as_path()) {
         bail!("summary path must be different from the PDF output path");
     }
+    let pdf_options = render_options(arguments)?;
 
     prepare_output(arguments.output_mode, &arguments.output)?;
 
@@ -250,7 +276,7 @@ pub(crate) fn render(arguments: &RenderArgs) -> Result<()> {
             continue;
         }
 
-        let rendered = render_row(&template, row, row_index, &asset_base);
+        let rendered = render_row(&template, row, row_index, &asset_base, &pdf_options);
         let (document, pdf) = match rendered {
             Ok(rendered) => rendered,
             Err(error) => {
@@ -305,9 +331,13 @@ pub(crate) fn render(arguments: &RenderArgs) -> Result<()> {
     }
 
     if arguments.output_mode == OutputMode::Combined && !stopped && !prepared.is_empty() {
-        if let Err(error) =
-            write_combined_output(&template, &prepared, &arguments.output, &mut summary)
-        {
+        if let Err(error) = write_combined_output(
+            &template,
+            &prepared,
+            &arguments.output,
+            &pdf_options,
+            &mut summary,
+        ) {
             eprintln!("combined output failed: {error:#}");
             for row in &prepared {
                 summary.failure(row.row_index, row.warnings, &error);
@@ -336,6 +366,25 @@ pub(crate) fn render(arguments: &RenderArgs) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn render_options(arguments: &RenderArgs) -> Result<PdfRenderOptions> {
+    let mut options = if arguments.print_ready {
+        PdfRenderOptions::print_ready()
+    } else {
+        PdfRenderOptions::default()
+    };
+    if let Some(minimum) = arguments.min_image_dpi {
+        if !minimum.is_finite() || minimum <= 0.0 {
+            bail!("--min-image-dpi must be positive and finite");
+        }
+        options.min_image_dpi = Some(minimum);
+    }
+    options.require_embedded_fonts |= arguments.require_embedded_fonts;
+    if let Some(target) = arguments.pdf_x {
+        options.pdf_x = Some(target.into());
+    }
+    Ok(options)
 }
 
 fn select_rows(
@@ -382,6 +431,7 @@ fn render_row(
     row: &DataRow,
     row_index: usize,
     asset_base: &Path,
+    pdf_options: &PdfRenderOptions,
 ) -> Result<(ResolvedDocument, Vec<u8>)> {
     let mut document = BasicLayoutEngine
         .layout_with_options(
@@ -400,7 +450,7 @@ fn render_row(
     }
 
     let pdf = PdfRenderer
-        .render(&document)
+        .render_with_options(&document, pdf_options)
         .with_context(|| format!("failed to render dataset row {row_index}"))?;
     Ok((document, pdf))
 }
@@ -409,6 +459,7 @@ fn write_combined_output(
     template: &Template,
     prepared: &[PreparedRow],
     output: &Path,
+    pdf_options: &PdfRenderOptions,
     summary: &mut JobSummary,
 ) -> Result<()> {
     let width_pt = prepared[0].document.width_pt;
@@ -421,10 +472,12 @@ fn write_combined_output(
         title: format!("{} variable-data job", template.name),
         width_pt,
         height_pt,
+        bleed_pt: prepared[0].document.bleed_pt,
+        metadata: template.document.metadata.clone(),
         pages,
     };
     let pdf = PdfRenderer
-        .render(&document)
+        .render_with_options(&document, pdf_options)
         .context("failed to render combined PDF")?;
     write_pdf(output, &pdf)?;
 

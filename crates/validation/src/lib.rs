@@ -4,8 +4,8 @@ use std::{collections::HashSet, fmt};
 
 use print_forge_dataset::{DataRow, Dataset};
 use print_forge_template::{
-    Bounds, Element, Field, FieldType, FontFamily, Length, Page, StackElement, TableElement,
-    Template,
+    Bounds, Color, DocumentMetadata, Element, Field, FieldType, FontFamily, Length, Page,
+    StackElement, TableElement, Template,
 };
 
 pub const SUPPORTED_SCHEMA_VERSION: u32 = 1;
@@ -147,6 +147,7 @@ pub fn validate_template(template: &Template) -> ValidationReport {
 
     validate_fields(&template.fields, &mut report);
     validate_fonts(&template.fonts, &mut report);
+    validate_metadata(&template.document.metadata, &mut report);
 
     if template.pages.is_empty() {
         report.error(
@@ -265,6 +266,39 @@ fn validate_fonts(fonts: &[FontFamily], report: &mut ValidationReport) {
     }
 }
 
+fn validate_metadata(metadata: &DocumentMetadata, report: &mut ValidationReport) {
+    for (field, value) in [
+        ("title", metadata.title.as_deref()),
+        ("author", metadata.author.as_deref()),
+        ("subject", metadata.subject.as_deref()),
+        ("identifier", metadata.identifier.as_deref()),
+    ] {
+        if value.is_some_and(|value| value.trim().is_empty()) {
+            report.error(
+                "metadata.empty_value",
+                format!("document.metadata.{field}"),
+                format!("metadata {field} cannot be empty when provided"),
+            );
+        }
+    }
+
+    for (index, keyword) in metadata.keywords.iter().enumerate() {
+        if keyword.trim().is_empty() {
+            report.error(
+                "metadata.empty_keyword",
+                format!("document.metadata.keywords[{index}]"),
+                "metadata keywords cannot be empty",
+            );
+        }
+    }
+}
+
+fn validate_color(value: &str, path: impl Into<String>, report: &mut ValidationReport) {
+    if let Err(error) = value.parse::<Color>() {
+        report.error("color.invalid", path, error.to_string());
+    }
+}
+
 fn validate_page(page: &Page, page_index: usize, canvas: Canvas, report: &mut ValidationReport) {
     for (element_index, element) in page.elements.iter().enumerate() {
         let path = format!("pages[{page_index}].elements[{element_index}]");
@@ -318,6 +352,7 @@ fn validate_element(
                     );
                 }
             }
+            validate_color(&text.color, format!("{path}.color"), report);
         }
         Element::Image(image) => {
             validate_optional_bounds(
@@ -352,6 +387,10 @@ fn validate_element(
                     "stroke width",
                     report,
                 );
+                validate_color(&stroke.color, format!("{path}.stroke.color"), report);
+            }
+            if let Some(fill) = &rectangle.fill {
+                validate_color(fill, format!("{path}.fill"), report);
             }
         }
         Element::Line(line) => {
@@ -360,6 +399,7 @@ fn validate_element(
             validate_finite_length(line.x2, format!("{path}.x2"), "line coordinate", report);
             validate_finite_length(line.y2, format!("{path}.y2"), "line coordinate", report);
             validate_positive_length(line.width, format!("{path}.width"), "line width", report);
+            validate_color(&line.color, format!("{path}.color"), report);
 
             let start = (line.x1.to_points(), line.y1.to_points());
             let end = (line.x2.to_points(), line.y2.to_points());

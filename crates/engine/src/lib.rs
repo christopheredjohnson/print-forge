@@ -7,7 +7,8 @@ use std::{
 };
 
 use print_forge_template::{
-    DashStyle, Element, FontFamily, FontStyle, ImageFit, Stroke, Template, TextAlign, TextOverflow,
+    Color, DashStyle, DocumentMetadata, Element, FontFamily, FontStyle, ImageFit, Stroke, Template,
+    TextAlign, TextOverflow,
 };
 use thiserror::Error;
 
@@ -16,6 +17,8 @@ pub struct ResolvedDocument {
     pub title: String,
     pub width_pt: f32,
     pub height_pt: f32,
+    pub bleed_pt: f32,
+    pub metadata: DocumentMetadata,
     pub pages: Vec<ResolvedPage>,
 }
 
@@ -46,7 +49,7 @@ pub struct TextCommand {
     pub font_size_pt: f32,
     pub line_height_pt: f32,
     pub font: ResolvedFont,
-    pub color: String,
+    pub color: Color,
     pub clip: bool,
 }
 
@@ -74,7 +77,7 @@ pub struct ImageCommand {
 #[derive(Debug, Clone, PartialEq)]
 pub struct RectangleCommand {
     pub bounds: Rect,
-    pub fill: Option<String>,
+    pub fill: Option<Color>,
     pub stroke: Option<StrokeCommand>,
 }
 
@@ -83,7 +86,7 @@ pub struct LineCommand {
     pub start: Point,
     pub end: Point,
     pub width_pt: f32,
-    pub color: String,
+    pub color: Color,
     pub dash: LineDash,
 }
 
@@ -110,7 +113,7 @@ pub struct Rect {
 #[derive(Debug, Clone, PartialEq)]
 pub struct StrokeCommand {
     pub width_pt: f32,
-    pub color: String,
+    pub color: Color,
     pub dash: LineDash,
 }
 
@@ -200,6 +203,11 @@ impl BasicLayoutEngine {
             title: template.name.clone(),
             width_pt,
             height_pt,
+            bleed_pt: template
+                .document
+                .bleed
+                .map_or(0.0, |bleed| bleed.to_points()),
+            metadata: template.document.metadata.clone(),
             pages,
         })
     }
@@ -247,7 +255,7 @@ fn layout_element(
                 font_size_pt: laid_out.font_size_pt,
                 line_height_pt: laid_out.line_height_pt,
                 font,
-                color: text.color.clone(),
+                color: resolve_color(&text.color)?,
                 clip: text.overflow == TextOverflow::Clip,
             }))
         }
@@ -274,8 +282,8 @@ fn layout_element(
 
             Ok(DrawCommand::Rectangle(RectangleCommand {
                 bounds: resolve_bounds(bounds),
-                fill: rectangle.fill.clone(),
-                stroke: rectangle.stroke.as_ref().map(resolve_stroke),
+                fill: rectangle.fill.as_deref().map(resolve_color).transpose()?,
+                stroke: rectangle.stroke.as_ref().map(resolve_stroke).transpose()?,
             }))
         }
         Element::Line(line) => Ok(DrawCommand::Line(LineCommand {
@@ -288,7 +296,7 @@ fn layout_element(
                 y: line.y2.to_points(),
             },
             width_pt: line.width.to_points(),
-            color: line.color.clone(),
+            color: resolve_color(&line.color)?,
             dash: resolve_dash(line.dash),
         })),
         Element::Svg(svg) => {
@@ -627,12 +635,18 @@ fn resolve_bounds(bounds: &print_forge_template::Bounds) -> Rect {
     }
 }
 
-fn resolve_stroke(stroke: &Stroke) -> StrokeCommand {
-    StrokeCommand {
+fn resolve_stroke(stroke: &Stroke) -> Result<StrokeCommand, ElementLayoutError> {
+    Ok(StrokeCommand {
         width_pt: stroke.width.to_points(),
-        color: stroke.color.clone(),
+        color: resolve_color(&stroke.color)?,
         dash: resolve_dash(stroke.dash),
-    }
+    })
+}
+
+fn resolve_color(value: &str) -> Result<Color, ElementLayoutError> {
+    value.parse::<Color>().map_err(|error| {
+        ElementLayoutError::InvalidLayout(format!("invalid color {value:?}: {error}"))
+    })
 }
 
 const fn resolve_dash(dash: DashStyle) -> LineDash {

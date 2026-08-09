@@ -244,3 +244,44 @@ fn rejects_invalid_font_and_text_layout_settings() {
     assert!(codes.contains(&"value.not_positive"));
     assert!(codes.contains(&"text.invalid_min_font_size"));
 }
+
+#[test]
+fn rejects_invalid_print_colors_and_empty_metadata() {
+    let template = template(
+        r##"{
+          "name": "Invalid print settings",
+          "document": {
+            "width": { "value": 100, "unit": "points" },
+            "height": { "value": 100, "unit": "points" },
+            "metadata": { "author": "", "keywords": [""] }
+          },
+          "pages": [{
+            "elements": [{
+              "type": "rectangle",
+              "position": {
+                "x": { "value": 10, "unit": "points" },
+                "y": { "value": 10, "unit": "points" },
+                "width": { "value": 20, "unit": "points" },
+                "height": { "value": 20, "unit": "points" }
+              },
+              "fill": "cmyk(0, 0%, 0%, 0%)",
+              "stroke": {
+                "width": { "value": 1, "unit": "points" },
+                "color": "rgb(300, 0, 0)"
+              }
+            }]
+          }]
+        }"##,
+    );
+
+    let report = validate_template(&template);
+    let paths: Vec<_> = report
+        .errors()
+        .map(|diagnostic| diagnostic.path.as_str())
+        .collect();
+
+    assert!(paths.contains(&"document.metadata.author"));
+    assert!(paths.contains(&"document.metadata.keywords[0]"));
+    assert!(paths.contains(&"pages[0].elements[0].fill"));
+    assert!(paths.contains(&"pages[0].elements[0].stroke.color"));
+}
