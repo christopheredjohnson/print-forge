@@ -12,6 +12,7 @@ crates/template   Serializable template schema
 crates/dataset    CSV and JSON dataset loading
 crates/engine     Renderer-neutral resolved document and draw commands
 crates/pdf        PDF renderer boundary and printpdf adapter home
+crates/validation Semantic validation and preflight diagnostics
 examples          Example templates and data
 ```
 
@@ -19,9 +20,16 @@ examples          Example templates and data
 
 ```sh
 cargo run -- validate examples/business-card.json
-cargo run -- inspect-data examples/people.csv
+cargo run -- validate examples/business-card.json --dataset examples/people.csv
+op
 cargo run -- render examples/business-card.json examples/people.csv output/pdf/business-card.pdf
 cargo test --workspace
+```
+
+To see validation failures for missing and empty required CSV fields:
+
+```sh
+cargo run -- validate examples/business-card.json --dataset examples/invalid-people.csv
 ```
 
 The current renderer supports absolute-positioned text, rectangles, and lines.
@@ -46,15 +54,15 @@ each priority before moving to the next unless an item is clearly independent.
 
 ### 1. Make incorrect output difficult
 
-- [ ] Add semantic template validation for document sizes, page counts, element
+- [x] Add semantic template validation for document sizes, page counts, element
       bounds, font sizes, stroke widths, and table column widths.
-- [ ] Validate the supported `schema_version` and report migration guidance for
+- [x] Validate the supported `schema_version` and report migration guidance for
       incompatible templates.
-- [ ] Validate required fields against the selected dataset before rendering.
-- [ ] Include the dataset row, page, and element path in every rendering error.
-- [ ] Detect elements outside the page or bleed area and report actionable
+- [x] Validate required fields against the selected dataset before rendering.
+- [x] Include the dataset row, page, and element path in every rendering error.
+- [x] Detect elements outside the page or bleed area and report actionable
       warnings.
-- [ ] Add integration tests for malformed templates, missing variables, empty
+- [x] Add integration tests for malformed templates, missing variables, empty
       datasets, and unsupported features.
 
 ### 2. Finish the essential absolute-layout elements

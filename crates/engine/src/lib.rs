@@ -14,7 +14,13 @@ pub struct ResolvedDocument {
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ResolvedPage {
-    pub commands: Vec<DrawCommand>,
+    pub commands: Vec<ResolvedCommand>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedCommand {
+    pub source_path: String,
+    pub command: DrawCommand,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -108,20 +114,34 @@ impl LayoutEngine for BasicLayoutEngine {
         let width_pt = template.document.width.to_points();
         let height_pt = template.document.height.to_points();
 
-        if width_pt <= 0.0 || height_pt <= 0.0 {
-            return Err(LayoutError::InvalidLayout(
-                "document dimensions must be positive".to_owned(),
-            ));
+        if !width_pt.is_finite() || !height_pt.is_finite() || width_pt <= 0.0 || height_pt <= 0.0 {
+            return Err(LayoutError::Document {
+                message: "document dimensions must be positive and finite".to_owned(),
+            });
         }
 
         let pages = template
             .pages
             .iter()
-            .map(|page| {
+            .enumerate()
+            .map(|(page_index, page)| {
                 let commands = page
                     .elements
                     .iter()
-                    .map(|element| layout_element(element, data))
+                    .enumerate()
+                    .map(|(element_index, element)| {
+                        let source_path = format!("pages[{page_index}].elements[{element_index}]");
+                        layout_element(element, data)
+                            .map(|command| ResolvedCommand {
+                                source_path: source_path.clone(),
+                                command,
+                            })
+                            .map_err(|source| LayoutError::Element {
+                                page_index,
+                                element_path: source_path,
+                                source,
+                            })
+                    })
                     .collect::<Result<Vec<_>, _>>()?;
 
                 Ok(ResolvedPage { commands })
@@ -137,11 +157,11 @@ impl LayoutEngine for BasicLayoutEngine {
     }
 }
 
-fn layout_element(element: &Element, data: &DataRow) -> Result<DrawCommand, LayoutError> {
+fn layout_element(element: &Element, data: &DataRow) -> Result<DrawCommand, ElementLayoutError> {
     match element {
         Element::Text(text) => {
             if text.align != TextAlign::Left {
-                return Err(LayoutError::UnsupportedFeature(
+                return Err(ElementLayoutError::UnsupportedFeature(
                     "centered, right-aligned, and justified text".to_owned(),
                 ));
             }
@@ -206,12 +226,12 @@ fn layout_element(element: &Element, data: &DataRow) -> Result<DrawCommand, Layo
                 source: resolve_string(&svg.source, data)?,
             }))
         }
-        Element::QrCode(_) => Err(LayoutError::UnsupportedElement("qr_code")),
-        Element::Group(_) => Err(LayoutError::UnsupportedElement("group")),
-        Element::Stack(_) => Err(LayoutError::UnsupportedElement("stack")),
-        Element::Table(_) => Err(LayoutError::UnsupportedElement("table")),
-        Element::Repeater(_) => Err(LayoutError::UnsupportedElement("repeater")),
-        Element::PageBreak => Err(LayoutError::UnsupportedElement("page_break")),
+        Element::QrCode(_) => Err(ElementLayoutError::UnsupportedElement("qr_code")),
+        Element::Group(_) => Err(ElementLayoutError::UnsupportedElement("group")),
+        Element::Stack(_) => Err(ElementLayoutError::UnsupportedElement("stack")),
+        Element::Table(_) => Err(ElementLayoutError::UnsupportedElement("table")),
+        Element::Repeater(_) => Err(ElementLayoutError::UnsupportedElement("repeater")),
+        Element::PageBreak => Err(ElementLayoutError::UnsupportedElement("page_break")),
     }
 }
 
@@ -240,32 +260,32 @@ const fn resolve_dash(dash: DashStyle) -> LineDash {
     }
 }
 
-fn missing_position(element: &'static str) -> LayoutError {
-    LayoutError::InvalidLayout(format!(
+fn missing_position(element: &'static str) -> ElementLayoutError {
+    ElementLayoutError::InvalidLayout(format!(
         "absolute-positioned {element} element is missing position"
     ))
 }
 
-fn resolve_string(input: &str, data: &DataRow) -> Result<String, LayoutError> {
+fn resolve_string(input: &str, data: &DataRow) -> Result<String, ElementLayoutError> {
     let mut output = String::with_capacity(input.len());
     let mut remaining = input;
 
     while let Some(start) = remaining.find("{{") {
         output.push_str(&remaining[..start]);
         let expression = &remaining[start + 2..];
-        let end = expression
-            .find("}}")
-            .ok_or_else(|| LayoutError::InvalidTemplate("unclosed template variable".to_owned()))?;
+        let end = expression.find("}}").ok_or_else(|| {
+            ElementLayoutError::InvalidTemplate("unclosed template variable".to_owned())
+        })?;
         let key = expression[..end].trim();
 
         if key.is_empty() {
-            return Err(LayoutError::InvalidTemplate(
+            return Err(ElementLayoutError::InvalidTemplate(
                 "template variable name cannot be empty".to_owned(),
             ));
         }
 
-        let value =
-            lookup_value(data, key).ok_or_else(|| LayoutError::MissingVariable(key.to_owned()))?;
+        let value = lookup_value(data, key)
+            .ok_or_else(|| ElementLayoutError::MissingVariable(key.to_owned()))?;
 
         if let Some(value) = value.as_str() {
             output.push_str(value);
@@ -277,7 +297,7 @@ fn resolve_string(input: &str, data: &DataRow) -> Result<String, LayoutError> {
     }
 
     if remaining.contains("}}") {
-        return Err(LayoutError::InvalidTemplate(
+        return Err(ElementLayoutError::InvalidTemplate(
             "template contains an unmatched closing delimiter".to_owned(),
         ));
     }
@@ -299,6 +319,19 @@ fn lookup_value<'a>(data: &'a DataRow, path: &str) -> Option<&'a serde_json::Val
 
 #[derive(Debug, Error)]
 pub enum LayoutError {
+    #[error("document: {message}")]
+    Document { message: String },
+    #[error("page {page_index}, element {element_path}: {source}")]
+    Element {
+        page_index: usize,
+        element_path: String,
+        #[source]
+        source: ElementLayoutError,
+    },
+}
+
+#[derive(Debug, Error)]
+pub enum ElementLayoutError {
     #[error("template element is not supported by this layout engine: {0}")]
     UnsupportedElement(&'static str),
     #[error("template variable is missing: {0}")]
@@ -317,7 +350,7 @@ mod tests {
     use print_forge_template::Template;
     use serde_json::json;
 
-    use super::{BasicLayoutEngine, DrawCommand, LayoutEngine, LayoutError};
+    use super::{BasicLayoutEngine, DrawCommand, ElementLayoutError, LayoutEngine, LayoutError};
 
     const TEMPLATE: &str = r##"
         {
@@ -352,7 +385,7 @@ mod tests {
         .unwrap();
 
         let document = BasicLayoutEngine.layout(&template, &data).unwrap();
-        let DrawCommand::Text(text) = &document.pages[0].commands[0] else {
+        let DrawCommand::Text(text) = &document.pages[0].commands[0].command else {
             panic!("expected text command");
         };
 
@@ -367,6 +400,17 @@ mod tests {
             .layout(&template, &DataRow::new())
             .unwrap_err();
 
-        assert!(matches!(error, LayoutError::MissingVariable(_)));
+        assert!(matches!(
+            error,
+            LayoutError::Element {
+                source: ElementLayoutError::MissingVariable(_),
+                ..
+            }
+        ));
+        assert!(
+            error
+                .to_string()
+                .contains("page 0, element pages[0].elements[0]")
+        );
     }
 }

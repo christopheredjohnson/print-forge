@@ -1,0 +1,648 @@
+//! Semantic validation and preflight diagnostics.
+
+use std::{collections::HashSet, fmt};
+
+use print_forge_dataset::{DataRow, Dataset};
+use print_forge_template::{
+    Bounds, Element, Field, FieldType, Length, Page, StackElement, TableElement, Template,
+};
+
+pub const SUPPORTED_SCHEMA_VERSION: u32 = 1;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Severity {
+    Error,
+    Warning,
+}
+
+impl fmt::Display for Severity {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Error => formatter.write_str("error"),
+            Self::Warning => formatter.write_str("warning"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Diagnostic {
+    pub severity: Severity,
+    pub code: &'static str,
+    pub path: String,
+    pub message: String,
+}
+
+impl fmt::Display for Diagnostic {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "{}[{}] {}: {}",
+            self.severity, self.code, self.path, self.message
+        )
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ValidationReport {
+    diagnostics: Vec<Diagnostic>,
+}
+
+impl ValidationReport {
+    #[must_use]
+    pub fn diagnostics(&self) -> &[Diagnostic] {
+        &self.diagnostics
+    }
+
+    pub fn errors(&self) -> impl Iterator<Item = &Diagnostic> {
+        self.diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.severity == Severity::Error)
+    }
+
+    pub fn warnings(&self) -> impl Iterator<Item = &Diagnostic> {
+        self.diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.severity == Severity::Warning)
+    }
+
+    #[must_use]
+    pub fn is_valid(&self) -> bool {
+        self.errors().next().is_none()
+    }
+
+    #[must_use]
+    pub fn error_count(&self) -> usize {
+        self.errors().count()
+    }
+
+    #[must_use]
+    pub fn warning_count(&self) -> usize {
+        self.warnings().count()
+    }
+
+    fn error(&mut self, code: &'static str, path: impl Into<String>, message: impl Into<String>) {
+        self.diagnostics.push(Diagnostic {
+            severity: Severity::Error,
+            code,
+            path: path.into(),
+            message: message.into(),
+        });
+    }
+
+    fn warning(&mut self, code: &'static str, path: impl Into<String>, message: impl Into<String>) {
+        self.diagnostics.push(Diagnostic {
+            severity: Severity::Warning,
+            code,
+            path: path.into(),
+            message: message.into(),
+        });
+    }
+
+    fn append(&mut self, mut other: Self) {
+        self.diagnostics.append(&mut other.diagnostics);
+    }
+}
+
+#[must_use]
+pub fn validate_template(template: &Template) -> ValidationReport {
+    let mut report = ValidationReport::default();
+
+    if template.schema_version != SUPPORTED_SCHEMA_VERSION {
+        report.error(
+            "schema.unsupported_version",
+            "schema_version",
+            format!(
+                "schema version {} is not supported; this build supports version {}. \
+                 Migrate the template to schema_version {} before rendering",
+                template.schema_version, SUPPORTED_SCHEMA_VERSION, SUPPORTED_SCHEMA_VERSION
+            ),
+        );
+    }
+
+    if template.name.trim().is_empty() {
+        report.error(
+            "template.empty_name",
+            "name",
+            "template name cannot be empty",
+        );
+    }
+
+    validate_positive_length(
+        template.document.width,
+        "document.width",
+        "document width",
+        &mut report,
+    );
+    validate_positive_length(
+        template.document.height,
+        "document.height",
+        "document height",
+        &mut report,
+    );
+
+    if let Some(bleed) = template.document.bleed {
+        validate_nonnegative_length(bleed, "document.bleed", "document bleed", &mut report);
+    }
+
+    validate_fields(&template.fields, &mut report);
+
+    if template.pages.is_empty() {
+        report.error(
+            "document.no_pages",
+            "pages",
+            "template must contain at least one page",
+        );
+    }
+
+    let canvas = Canvas {
+        width: template.document.width.to_points(),
+        height: template.document.height.to_points(),
+        bleed: template.document.bleed.map_or(0.0, Length::to_points),
+    };
+
+    for (page_index, page) in template.pages.iter().enumerate() {
+        validate_page(page, page_index, canvas, &mut report);
+    }
+
+    report
+}
+
+#[must_use]
+pub fn validate_job(template: &Template, dataset: &Dataset) -> ValidationReport {
+    let mut report = validate_template(template);
+    report.append(validate_dataset(template, dataset));
+    report
+}
+
+#[must_use]
+pub fn validate_dataset(template: &Template, dataset: &Dataset) -> ValidationReport {
+    let mut report = ValidationReport::default();
+
+    if dataset.rows.is_empty() {
+        report.error(
+            "dataset.empty",
+            "rows",
+            "dataset must contain at least one row",
+        );
+        return report;
+    }
+
+    for (row_index, row) in dataset.rows.iter().enumerate() {
+        for field in &template.fields {
+            validate_row_field(row, row_index, field, &mut report);
+        }
+    }
+
+    report
+}
+
+fn validate_fields(fields: &[Field], report: &mut ValidationReport) {
+    let mut names = HashSet::new();
+
+    for (index, field) in fields.iter().enumerate() {
+        let path = format!("fields[{index}].name");
+        let name = field.name.trim();
+
+        if name.is_empty() {
+            report.error("field.empty_name", path, "field name cannot be empty");
+        } else if !names.insert(name) {
+            report.error(
+                "field.duplicate_name",
+                path,
+                format!("field name '{}' is declared more than once", field.name),
+            );
+        }
+    }
+}
+
+fn validate_page(page: &Page, page_index: usize, canvas: Canvas, report: &mut ValidationReport) {
+    for (element_index, element) in page.elements.iter().enumerate() {
+        let path = format!("pages[{page_index}].elements[{element_index}]");
+        validate_element(element, &path, canvas, PositionContext::Absolute, report);
+    }
+}
+
+fn validate_element(
+    element: &Element,
+    path: &str,
+    canvas: Canvas,
+    position_context: PositionContext,
+    report: &mut ValidationReport,
+) {
+    match element {
+        Element::Text(text) => {
+            validate_optional_bounds(
+                text.position.as_ref(),
+                path,
+                "text",
+                canvas,
+                position_context,
+                report,
+            );
+            validate_positive_length(
+                text.font_size,
+                format!("{path}.font_size"),
+                "font size",
+                report,
+            );
+        }
+        Element::Image(image) => validate_optional_bounds(
+            image.position.as_ref(),
+            path,
+            "image",
+            canvas,
+            position_context,
+            report,
+        ),
+        Element::Rectangle(rectangle) => {
+            validate_optional_bounds(
+                rectangle.position.as_ref(),
+                path,
+                "rectangle",
+                canvas,
+                position_context,
+                report,
+            );
+            if let Some(stroke) = &rectangle.stroke {
+                validate_positive_length(
+                    stroke.width,
+                    format!("{path}.stroke.width"),
+                    "stroke width",
+                    report,
+                );
+            }
+        }
+        Element::Line(line) => {
+            validate_finite_length(line.x1, format!("{path}.x1"), "line coordinate", report);
+            validate_finite_length(line.y1, format!("{path}.y1"), "line coordinate", report);
+            validate_finite_length(line.x2, format!("{path}.x2"), "line coordinate", report);
+            validate_finite_length(line.y2, format!("{path}.y2"), "line coordinate", report);
+            validate_positive_length(line.width, format!("{path}.width"), "line width", report);
+
+            let start = (line.x1.to_points(), line.y1.to_points());
+            let end = (line.x2.to_points(), line.y2.to_points());
+            if coordinates_are_finite(&[start.0, start.1, end.0, end.1])
+                && (!canvas.contains_point(start) || !canvas.contains_point(end))
+            {
+                report.warning(
+                    "element.outside_bleed",
+                    path,
+                    "line extends outside the page bleed area and may be clipped",
+                );
+            }
+        }
+        Element::Svg(svg) => validate_optional_bounds(
+            svg.position.as_ref(),
+            path,
+            "svg",
+            canvas,
+            position_context,
+            report,
+        ),
+        Element::QrCode(qr_code) => validate_optional_bounds(
+            qr_code.position.as_ref(),
+            path,
+            "qr_code",
+            canvas,
+            position_context,
+            report,
+        ),
+        Element::Group(group) => {
+            if let Some(position) = &group.position {
+                validate_bounds(position, &format!("{path}.position"), canvas, report);
+            }
+            for (index, child) in group.children.iter().enumerate() {
+                validate_element(
+                    child,
+                    &format!("{path}.children[{index}]"),
+                    canvas,
+                    PositionContext::Absolute,
+                    report,
+                );
+            }
+        }
+        Element::Stack(stack) => validate_stack(stack, path, canvas, position_context, report),
+        Element::Table(table) => {
+            validate_optional_bounds(
+                table.position.as_ref(),
+                path,
+                "table",
+                canvas,
+                position_context,
+                report,
+            );
+            validate_table(table, path, report);
+        }
+        Element::Repeater(repeater) => {
+            if repeater.source.trim().is_empty() {
+                report.error(
+                    "repeater.empty_source",
+                    format!("{path}.source"),
+                    "repeater source cannot be empty",
+                );
+            }
+            validate_element(
+                &repeater.template,
+                &format!("{path}.template"),
+                canvas,
+                PositionContext::Flow,
+                report,
+            );
+        }
+        Element::PageBreak => {}
+    }
+}
+
+fn validate_stack(
+    stack: &StackElement,
+    path: &str,
+    canvas: Canvas,
+    position_context: PositionContext,
+    report: &mut ValidationReport,
+) {
+    validate_optional_bounds(
+        stack.position.as_ref(),
+        path,
+        "stack",
+        canvas,
+        position_context,
+        report,
+    );
+    validate_nonnegative_length(stack.gap, format!("{path}.gap"), "stack gap", report);
+
+    for (index, child) in stack.children.iter().enumerate() {
+        validate_element(
+            child,
+            &format!("{path}.children[{index}]"),
+            canvas,
+            PositionContext::Flow,
+            report,
+        );
+    }
+}
+
+fn validate_table(table: &TableElement, path: &str, report: &mut ValidationReport) {
+    if table.source.trim().is_empty() {
+        report.error(
+            "table.empty_source",
+            format!("{path}.source"),
+            "table source cannot be empty",
+        );
+    }
+
+    if table.columns.is_empty() {
+        report.error(
+            "table.no_columns",
+            format!("{path}.columns"),
+            "table must define at least one column",
+        );
+        return;
+    }
+
+    let mut total_width = 0.0_f32;
+    let mut all_widths_valid = true;
+
+    for (index, column) in table.columns.iter().enumerate() {
+        let column_path = format!("{path}.columns[{index}]");
+
+        if column.field.trim().is_empty() {
+            report.error(
+                "table.empty_column_field",
+                format!("{column_path}.field"),
+                "table column field cannot be empty",
+            );
+        }
+
+        if !column.width.is_finite() || column.width <= 0.0 {
+            all_widths_valid = false;
+            report.error(
+                "table.invalid_column_width",
+                format!("{column_path}.width"),
+                "table column width must be a positive finite fraction",
+            );
+        } else {
+            total_width += column.width;
+        }
+    }
+
+    if all_widths_valid && (total_width - 1.0).abs() > 0.001 {
+        report.error(
+            "table.invalid_total_width",
+            format!("{path}.columns"),
+            format!("table column width fractions must total 1.0; found {total_width:.4}"),
+        );
+    }
+}
+
+fn validate_optional_bounds(
+    bounds: Option<&Bounds>,
+    path: &str,
+    element_name: &str,
+    canvas: Canvas,
+    position_context: PositionContext,
+    report: &mut ValidationReport,
+) {
+    match bounds {
+        Some(bounds) => validate_bounds(bounds, &format!("{path}.position"), canvas, report),
+        None if position_context == PositionContext::Absolute => report.error(
+            "element.missing_position",
+            format!("{path}.position"),
+            format!("absolute-positioned {element_name} element requires position"),
+        ),
+        None => {}
+    }
+}
+
+fn validate_bounds(bounds: &Bounds, path: &str, canvas: Canvas, report: &mut ValidationReport) {
+    validate_finite_length(bounds.x, format!("{path}.x"), "x coordinate", report);
+    validate_finite_length(bounds.y, format!("{path}.y"), "y coordinate", report);
+    validate_positive_length(
+        bounds.width,
+        format!("{path}.width"),
+        "element width",
+        report,
+    );
+    validate_positive_length(
+        bounds.height,
+        format!("{path}.height"),
+        "element height",
+        report,
+    );
+
+    let values = [
+        bounds.x.to_points(),
+        bounds.y.to_points(),
+        bounds.width.to_points(),
+        bounds.height.to_points(),
+    ];
+
+    if coordinates_are_finite(&values)
+        && values[2] > 0.0
+        && values[3] > 0.0
+        && !canvas.contains_bounds(values[0], values[1], values[2], values[3])
+    {
+        report.warning(
+            "element.outside_bleed",
+            path,
+            "element extends outside the page bleed area and may be clipped",
+        );
+    }
+}
+
+fn validate_positive_length(
+    length: Length,
+    path: impl Into<String>,
+    label: &str,
+    report: &mut ValidationReport,
+) {
+    let value = length.to_points();
+    if !value.is_finite() || value <= 0.0 {
+        report.error(
+            "value.not_positive",
+            path,
+            format!("{label} must be a positive finite value"),
+        );
+    }
+}
+
+fn validate_nonnegative_length(
+    length: Length,
+    path: impl Into<String>,
+    label: &str,
+    report: &mut ValidationReport,
+) {
+    let value = length.to_points();
+    if !value.is_finite() || value < 0.0 {
+        report.error(
+            "value.negative",
+            path,
+            format!("{label} must be a nonnegative finite value"),
+        );
+    }
+}
+
+fn validate_finite_length(
+    length: Length,
+    path: impl Into<String>,
+    label: &str,
+    report: &mut ValidationReport,
+) {
+    if !length.to_points().is_finite() {
+        report.error("value.not_finite", path, format!("{label} must be finite"));
+    }
+}
+
+fn validate_row_field(
+    row: &DataRow,
+    row_index: usize,
+    field: &Field,
+    report: &mut ValidationReport,
+) {
+    let path = format!("rows[{row_index}].{}", field.name);
+    let value = lookup_value(row, &field.name);
+
+    let Some(value) = value else {
+        if field.required {
+            report.error(
+                "dataset.missing_required_field",
+                path,
+                format!("required field '{}' is missing", field.name),
+            );
+        }
+        return;
+    };
+
+    if value.is_null() || value.as_str().is_some_and(|value| value.trim().is_empty()) {
+        if field.required {
+            report.error(
+                "dataset.empty_required_field",
+                path,
+                format!("required field '{}' cannot be empty", field.name),
+            );
+        }
+        return;
+    }
+
+    if !value_matches_field_type(value, field.field_type) {
+        report.error(
+            "dataset.invalid_field_type",
+            path,
+            format!(
+                "field '{}' does not match declared type {}",
+                field.name,
+                field_type_name(field.field_type)
+            ),
+        );
+    }
+}
+
+fn lookup_value<'a>(row: &'a DataRow, path: &str) -> Option<&'a serde_json::Value> {
+    let mut segments = path.split('.');
+    let mut value = row.get(segments.next()?)?;
+
+    for segment in segments {
+        value = value.get(segment)?;
+    }
+
+    Some(value)
+}
+
+fn value_matches_field_type(value: &serde_json::Value, field_type: FieldType) -> bool {
+    match field_type {
+        FieldType::Text => value.is_string() || value.is_number() || value.is_boolean(),
+        FieldType::Number => {
+            value.is_number()
+                || value.as_str().is_some_and(|value| {
+                    value.parse::<f64>().is_ok_and(|number| number.is_finite())
+                })
+        }
+        FieldType::Image => value.is_string(),
+        FieldType::Boolean => {
+            value.is_boolean()
+                || value.as_str().is_some_and(|value| {
+                    value.eq_ignore_ascii_case("true") || value.eq_ignore_ascii_case("false")
+                })
+        }
+        FieldType::Collection => value.is_array(),
+    }
+}
+
+const fn field_type_name(field_type: FieldType) -> &'static str {
+    match field_type {
+        FieldType::Text => "text",
+        FieldType::Number => "number",
+        FieldType::Image => "image",
+        FieldType::Boolean => "boolean",
+        FieldType::Collection => "collection",
+    }
+}
+
+fn coordinates_are_finite(values: &[f32]) -> bool {
+    values.iter().all(|value| value.is_finite())
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Canvas {
+    width: f32,
+    height: f32,
+    bleed: f32,
+}
+
+impl Canvas {
+    fn contains_point(self, point: (f32, f32)) -> bool {
+        point.0 >= -self.bleed
+            && point.1 >= -self.bleed
+            && point.0 <= self.width + self.bleed
+            && point.1 <= self.height + self.bleed
+    }
+
+    fn contains_bounds(self, x: f32, y: f32, width: f32, height: f32) -> bool {
+        self.contains_point((x, y)) && self.contains_point((x + width, y + height))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PositionContext {
+    Absolute,
+    Flow,
+}
