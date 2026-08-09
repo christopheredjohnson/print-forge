@@ -190,11 +190,20 @@ pub fn validate_dataset(template: &Template, dataset: &Dataset) -> ValidationRep
     }
 
     for (row_index, row) in dataset.rows.iter().enumerate() {
-        for field in &template.fields {
-            validate_row_field(row, row_index, field, &mut report);
-        }
+        report.append(validate_data_row(template, row, row_index));
     }
 
+    report
+}
+
+/// Validate one dataset row while retaining its original zero-based row index
+/// in every diagnostic path.
+#[must_use]
+pub fn validate_data_row(template: &Template, row: &DataRow, row_index: usize) -> ValidationReport {
+    let mut report = ValidationReport::default();
+    for field in &template.fields {
+        validate_row_field(row, row_index, field, &mut report);
+    }
     report
 }
 

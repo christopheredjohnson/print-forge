@@ -20,7 +20,7 @@
             "x": { "value": 1.0, "unit": "inches" },
             "y": { "value": 1.45, "unit": "inches" },
             "width": { "value": 2.1, "unit": "inches" },
-            "height": { "value": 0.25, "unit": "inches" }
+            "height": { "value": 0.3, "unit": "inches" }
           },
           "value": "{{first_name}} {{last_name}}",
           "font_size": { "value": 16, "unit": "points" }
