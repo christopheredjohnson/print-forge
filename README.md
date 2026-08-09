@@ -25,7 +25,7 @@ examples          Example templates and data
 ```sh
 cargo run -- validate examples/business-card.json
 cargo run -- validate examples/business-card.json --dataset examples/people.csv
-cargo run -- render examples/business-card.json examples/people.csv output/pdf/business-card.pdf
+cargo run -- render examples/business-card.json examples/people.csv output/pdf/business-cards.pdf
 cargo run -- render examples/absolute-layout.json examples/absolute-layout-data.json output/pdf/absolute-layout.pdf
 cargo test --workspace
 ```
@@ -35,6 +35,39 @@ To see validation failures for missing and empty required CSV fields:
 ```sh
 cargo run -- validate examples/business-card.json --dataset examples/invalid-people.csv
 ```
+
+## Variable-data jobs
+
+Combined mode is the default. Every selected dataset row contributes the
+template's pages to one PDF:
+
+```sh
+cargo run -- render examples/business-card.json examples/people.csv \
+  output/pdf/business-cards.pdf \
+  --summary output/jobs/business-cards.json
+```
+
+Separate mode writes one PDF per row. Output names accept dotted dataset fields
+and the special one-based `{{row}}` value. Names are made filesystem-safe, and
+existing or duplicate names receive a numeric suffix instead of being
+overwritten:
+
+```sh
+cargo run -- render examples/business-card.json examples/people.csv \
+  output/pdf/business-cards \
+  --output-mode separate \
+  --output-name '{{last_name}}-{{first_name}}' \
+  --rows 1-2 \
+  --limit 2 \
+  --continue-on-error \
+  --summary output/jobs/business-cards.json
+```
+
+Row ranges are one-based and inclusive. `--limit` is applied after the range.
+`--continue-on-error` attempts the remaining rows and produces valid partial
+output, but the command still exits unsuccessfully when any row fails. The JSON
+summary records status, successes, warnings, failures, output paths, per-row
+results, and elapsed milliseconds.
 
 The current renderer supports measured and wrapped absolute-positioned text,
 embedded font families, local PNG/JPEG images, rectangles, and lines. Asset
@@ -84,12 +117,12 @@ each priority before moving to the next unless an item is clearly independent.
 
 ### 3. Support real variable-data jobs
 
-- [ ] Render every dataset row rather than only the first row.
-- [ ] Support one combined multipage PDF and one-PDF-per-row output modes.
-- [ ] Add collision-safe output naming from a field such as
+- [x] Render every dataset row rather than only the first row.
+- [x] Support one combined multipage PDF and one-PDF-per-row output modes.
+- [x] Add collision-safe output naming from a field such as
       `{{invoice_number}}`.
-- [ ] Add row ranges, record limits, and `--continue-on-error` CLI options.
-- [ ] Produce a machine-readable job summary containing successes, warnings,
+- [x] Add row ranges, record limits, and `--continue-on-error` CLI options.
+- [x] Produce a machine-readable job summary containing successes, warnings,
       failures, output paths, and elapsed time.
 
 ### 4. Produce print-ready files

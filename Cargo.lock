@@ -830,6 +830,8 @@ dependencies = [
  "print-forge-pdf",
  "print-forge-template",
  "print-forge-validation",
+ "printpdf",
+ "serde",
  "serde_json",
 ]
 
