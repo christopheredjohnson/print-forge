@@ -1,0 +1,291 @@
+{
+  "schema_version": 1,
+  "name": "Absolute Layout Visual Fixture",
+  "document": {
+    "width": { "value": 612, "unit": "points" },
+    "height": { "value": 792, "unit": "points" }
+  },
+  "fonts": [
+    {
+      "name": "Fixture Sans",
+      "regular": "assets/fonts/Helvetica.ttf",
+      "bold": "assets/fonts/Helvetica-Bold.ttf",
+      "italic": "assets/fonts/Helvetica-Oblique.ttf",
+      "bold_italic": "assets/fonts/Helvetica-BoldOblique.ttf"
+    }
+  ],
+  "pages": [
+    {
+      "elements": [
+        {
+          "type": "rectangle",
+          "position": {
+            "x": { "value": 24, "unit": "points" },
+            "y": { "value": 24, "unit": "points" },
+            "width": { "value": 564, "unit": "points" },
+            "height": { "value": 744, "unit": "points" }
+          },
+          "fill": "#F8FAFC",
+          "stroke": {
+            "width": { "value": 1.5, "unit": "points" },
+            "color": "#0F172A"
+          }
+        },
+        {
+          "type": "text",
+          "position": {
+            "x": { "value": 42, "unit": "points" },
+            "y": { "value": 700, "unit": "points" },
+            "width": { "value": 528, "unit": "points" },
+            "height": { "value": 42, "unit": "points" }
+          },
+          "value": "Essential absolute layout",
+          "font": "Fixture Sans",
+          "font_style": "bold",
+          "font_size": { "value": 24, "unit": "points" },
+          "line_height": { "value": 28, "unit": "points" },
+          "align": "center",
+          "overflow": "error",
+          "color": "#0F172A"
+        },
+        {
+          "type": "line",
+          "x1": { "value": 42, "unit": "points" },
+          "y1": { "value": 686, "unit": "points" },
+          "x2": { "value": 570, "unit": "points" },
+          "y2": { "value": 686, "unit": "points" },
+          "width": { "value": 2, "unit": "points" },
+          "color": "#2563EB",
+          "dash": "dashed"
+        },
+        {
+          "type": "text",
+          "position": {
+            "x": { "value": 42, "unit": "points" },
+            "y": { "value": 610, "unit": "points" },
+            "width": { "value": 160, "unit": "points" },
+            "height": { "value": 54, "unit": "points" }
+          },
+          "value": "Left aligned text wraps using measured glyph advances.",
+          "font": "Fixture Sans",
+          "font_size": { "value": 11, "unit": "points" },
+          "line_height": { "value": 14, "unit": "points" },
+          "align": "left",
+          "overflow": "error",
+          "color": "#334155"
+        },
+        {
+          "type": "text",
+          "position": {
+            "x": { "value": 226, "unit": "points" },
+            "y": { "value": 610, "unit": "points" },
+            "width": { "value": 160, "unit": "points" },
+            "height": { "value": 54, "unit": "points" }
+          },
+          "value": "Centered italic text wraps inside this fixed box.",
+          "font": "Fixture Sans",
+          "font_style": "italic",
+          "font_size": { "value": 11, "unit": "points" },
+          "line_height": { "value": 14, "unit": "points" },
+          "align": "center",
+          "overflow": "error",
+          "color": "#334155"
+        },
+        {
+          "type": "text",
+          "position": {
+            "x": { "value": 410, "unit": "points" },
+            "y": { "value": 610, "unit": "points" },
+            "width": { "value": 160, "unit": "points" },
+            "height": { "value": 54, "unit": "points" }
+          },
+          "value": "Right aligned bold italic text wraps here.",
+          "font": "Fixture Sans",
+          "font_style": "bold_italic",
+          "font_size": { "value": 11, "unit": "points" },
+          "line_height": { "value": 14, "unit": "points" },
+          "align": "right",
+          "overflow": "error",
+          "color": "#334155"
+        },
+        {
+          "type": "text",
+          "position": {
+            "x": { "value": 42, "unit": "points" },
+            "y": { "value": 530, "unit": "points" },
+            "width": { "value": 528, "unit": "points" },
+            "height": { "value": 54, "unit": "points" }
+          },
+          "value": "Justified lines distribute the remaining width between words while the final line remains naturally spaced. This fixture makes alignment failures easy to spot.",
+          "font": "Fixture Sans",
+          "font_size": { "value": 12, "unit": "points" },
+          "line_height": { "value": 16, "unit": "points" },
+          "align": "justify",
+          "overflow": "error",
+          "color": "#0F172A"
+        },
+        {
+          "type": "rectangle",
+          "position": {
+            "x": { "value": 42, "unit": "points" },
+            "y": { "value": 464, "unit": "points" },
+            "width": { "value": 250, "unit": "points" },
+            "height": { "value": 42, "unit": "points" }
+          },
+          "fill": "#DBEAFE",
+          "stroke": {
+            "width": { "value": 1, "unit": "points" },
+            "color": "#2563EB",
+            "dash": "dotted"
+          }
+        },
+        {
+          "type": "text",
+          "position": {
+            "x": { "value": 48, "unit": "points" },
+            "y": { "value": 470, "unit": "points" },
+            "width": { "value": 238, "unit": "points" },
+            "height": { "value": 30, "unit": "points" }
+          },
+          "value": "Shrink: {{shrink_text}}",
+          "font": "Fixture Sans",
+          "font_style": "bold",
+          "font_size": { "value": 18, "unit": "points" },
+          "min_font_size": { "value": 7, "unit": "points" },
+          "overflow": "shrink",
+          "color": "#1E3A8A"
+        },
+        {
+          "type": "rectangle",
+          "position": {
+            "x": { "value": 320, "unit": "points" },
+            "y": { "value": 464, "unit": "points" },
+            "width": { "value": 250, "unit": "points" },
+            "height": { "value": 42, "unit": "points" }
+          },
+          "fill": "#FEE2E2",
+          "stroke": {
+            "width": { "value": 1, "unit": "points" },
+            "color": "#DC2626"
+          }
+        },
+        {
+          "type": "text",
+          "position": {
+            "x": { "value": 326, "unit": "points" },
+            "y": { "value": 470, "unit": "points" },
+            "width": { "value": 238, "unit": "points" },
+            "height": { "value": 30, "unit": "points" }
+          },
+          "value": "Clip: this deliberately long text continues outside its box but must remain invisible beyond the red border.",
+          "font": "Fixture Sans",
+          "font_size": { "value": 14, "unit": "points" },
+          "line_height": { "value": 17, "unit": "points" },
+          "overflow": "clip",
+          "color": "#7F1D1D"
+        },
+        {
+          "type": "image",
+          "position": {
+            "x": { "value": 42, "unit": "points" },
+            "y": { "value": 296, "unit": "points" },
+            "width": { "value": 160, "unit": "points" },
+            "height": { "value": 120, "unit": "points" }
+          },
+          "source": "assets/images/layout-fixture.png",
+          "fit": "contain"
+        },
+        {
+          "type": "image",
+          "position": {
+            "x": { "value": 226, "unit": "points" },
+            "y": { "value": 296, "unit": "points" },
+            "width": { "value": 160, "unit": "points" },
+            "height": { "value": 120, "unit": "points" }
+          },
+          "source": "assets/images/layout-fixture.jpg",
+          "fit": "cover"
+        },
+        {
+          "type": "image",
+          "position": {
+            "x": { "value": 410, "unit": "points" },
+            "y": { "value": 296, "unit": "points" },
+            "width": { "value": 160, "unit": "points" },
+            "height": { "value": 120, "unit": "points" }
+          },
+          "source": "assets/images/layout-fixture.png",
+          "fit": "stretch"
+        },
+        {
+          "type": "text",
+          "position": {
+            "x": { "value": 42, "unit": "points" },
+            "y": { "value": 260, "unit": "points" },
+            "width": { "value": 160, "unit": "points" },
+            "height": { "value": 20, "unit": "points" }
+          },
+          "value": "PNG · contain",
+          "font": "Fixture Sans",
+          "font_style": "bold",
+          "font_size": { "value": 10, "unit": "points" },
+          "align": "center"
+        },
+        {
+          "type": "text",
+          "position": {
+            "x": { "value": 226, "unit": "points" },
+            "y": { "value": 260, "unit": "points" },
+            "width": { "value": 160, "unit": "points" },
+            "height": { "value": 20, "unit": "points" }
+          },
+          "value": "JPEG · cover + clip",
+          "font": "Fixture Sans",
+          "font_style": "bold",
+          "font_size": { "value": 10, "unit": "points" },
+          "align": "center"
+        },
+        {
+          "type": "text",
+          "position": {
+            "x": { "value": 410, "unit": "points" },
+            "y": { "value": 260, "unit": "points" },
+            "width": { "value": 160, "unit": "points" },
+            "height": { "value": 20, "unit": "points" }
+          },
+          "value": "PNG · stretch",
+          "font": "Fixture Sans",
+          "font_style": "bold",
+          "font_size": { "value": 10, "unit": "points" },
+          "align": "center"
+        },
+        {
+          "type": "line",
+          "x1": { "value": 42, "unit": "points" },
+          "y1": { "value": 220, "unit": "points" },
+          "x2": { "value": 570, "unit": "points" },
+          "y2": { "value": 220, "unit": "points" },
+          "width": { "value": 1, "unit": "points" },
+          "color": "#64748B",
+          "dash": "dotted"
+        },
+        {
+          "type": "text",
+          "position": {
+            "x": { "value": 42, "unit": "points" },
+            "y": { "value": 72, "unit": "points" },
+            "width": { "value": 528, "unit": "points" },
+            "height": { "value": 120, "unit": "points" }
+          },
+          "value": "Font variants embedded: regular · bold · italic · bold italic\nAssets resolve from the template directory, independent of the shell working directory.\nRectangles, solid/dashed/dotted strokes, measured text, and raster images share one coordinate system.",
+          "font": "Fixture Sans",
+          "font_size": { "value": 12, "unit": "points" },
+          "line_height": { "value": 22, "unit": "points" },
+          "align": "center",
+          "overflow": "error",
+          "color": "#334155"
+        }
+      ]
+    }
+  ]
+}

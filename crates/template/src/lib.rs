@@ -70,7 +70,21 @@ pub struct Template {
     pub document: Document,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub fields: Vec<Field>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fonts: Vec<FontFamily>,
     pub pages: Vec<Page>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FontFamily {
+    pub name: String,
+    pub regular: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bold: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub italic: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bold_italic: Option<String>,
 }
 
 const fn default_schema_version() -> u32 {
@@ -134,9 +148,36 @@ pub struct TextElement {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font: Option<String>,
     #[serde(default)]
+    pub font_style: FontStyle,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_height: Option<Length>,
+    #[serde(default)]
     pub align: TextAlign,
+    #[serde(default)]
+    pub overflow: TextOverflow,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_font_size: Option<Length>,
     #[serde(default = "default_color")]
     pub color: String,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FontStyle {
+    #[default]
+    Regular,
+    Bold,
+    Italic,
+    BoldItalic,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TextOverflow {
+    Clip,
+    Shrink,
+    #[default]
+    Error,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

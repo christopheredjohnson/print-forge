@@ -4,7 +4,8 @@ use std::{collections::HashSet, fmt};
 
 use print_forge_dataset::{DataRow, Dataset};
 use print_forge_template::{
-    Bounds, Element, Field, FieldType, Length, Page, StackElement, TableElement, Template,
+    Bounds, Element, Field, FieldType, FontFamily, Length, Page, StackElement, TableElement,
+    Template,
 };
 
 pub const SUPPORTED_SCHEMA_VERSION: u32 = 1;
@@ -145,6 +146,7 @@ pub fn validate_template(template: &Template) -> ValidationReport {
     }
 
     validate_fields(&template.fields, &mut report);
+    validate_fonts(&template.fonts, &mut report);
 
     if template.pages.is_empty() {
         report.error(
@@ -215,6 +217,45 @@ fn validate_fields(fields: &[Field], report: &mut ValidationReport) {
     }
 }
 
+fn validate_fonts(fonts: &[FontFamily], report: &mut ValidationReport) {
+    let mut names = HashSet::new();
+    for (index, font) in fonts.iter().enumerate() {
+        let path = format!("fonts[{index}]");
+        let name = font.name.trim();
+        if name.is_empty() {
+            report.error(
+                "font.empty_name",
+                format!("{path}.name"),
+                "font family name cannot be empty",
+            );
+        } else if !names.insert(name) {
+            report.error(
+                "font.duplicate_name",
+                format!("{path}.name"),
+                format!(
+                    "font family name {:?} is declared more than once",
+                    font.name
+                ),
+            );
+        }
+
+        for (variant, source) in [
+            ("regular", Some(font.regular.as_str())),
+            ("bold", font.bold.as_deref()),
+            ("italic", font.italic.as_deref()),
+            ("bold_italic", font.bold_italic.as_deref()),
+        ] {
+            if source.is_some_and(|source| source.trim().is_empty()) {
+                report.error(
+                    "font.empty_source",
+                    format!("{path}.{variant}"),
+                    "font asset path cannot be empty",
+                );
+            }
+        }
+    }
+}
+
 fn validate_page(page: &Page, page_index: usize, canvas: Canvas, report: &mut ValidationReport) {
     for (element_index, element) in page.elements.iter().enumerate() {
         let path = format!("pages[{page_index}].elements[{element_index}]");
@@ -245,15 +286,47 @@ fn validate_element(
                 "font size",
                 report,
             );
+            if let Some(line_height) = text.line_height {
+                validate_positive_length(
+                    line_height,
+                    format!("{path}.line_height"),
+                    "line height",
+                    report,
+                );
+            }
+            if let Some(min_font_size) = text.min_font_size {
+                validate_positive_length(
+                    min_font_size,
+                    format!("{path}.min_font_size"),
+                    "minimum font size",
+                    report,
+                );
+                if min_font_size.to_points() > text.font_size.to_points() {
+                    report.error(
+                        "text.invalid_min_font_size",
+                        format!("{path}.min_font_size"),
+                        "minimum font size cannot exceed font size",
+                    );
+                }
+            }
         }
-        Element::Image(image) => validate_optional_bounds(
-            image.position.as_ref(),
-            path,
-            "image",
-            canvas,
-            position_context,
-            report,
-        ),
+        Element::Image(image) => {
+            validate_optional_bounds(
+                image.position.as_ref(),
+                path,
+                "image",
+                canvas,
+                position_context,
+                report,
+            );
+            if image.source.trim().is_empty() {
+                report.error(
+                    "image.empty_source",
+                    format!("{path}.source"),
+                    "image asset path cannot be empty",
+                );
+            }
+        }
         Element::Rectangle(rectangle) => {
             validate_optional_bounds(
                 rectangle.position.as_ref(),
