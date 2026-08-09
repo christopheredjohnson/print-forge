@@ -4,12 +4,24 @@
   "document": {
     "width": { "value": 3.5, "unit": "inches" },
     "height": { "value": 2.0, "unit": "inches" },
-    "bleed": { "value": 0.125, "unit": "inches" }
+    "bleed": { "value": 0.125, "unit": "inches" },
+    "metadata": {
+      "title": "Employee Business Cards",
+      "author": "Print Forge",
+      "subject": "Variable-data employee business cards",
+      "keywords": ["business cards", "variable data", "print"]
+    }
   },
   "fields": [
     { "name": "first_name", "field_type": "text", "required": true },
     { "name": "last_name", "field_type": "text", "required": true },
     { "name": "title", "field_type": "text", "required": true }
+  ],
+  "fonts": [
+    {
+      "name": "print-forge-sans",
+      "regular": "assets/fonts/Helvetica.ttf"
+    }
   ],
   "pages": [
     {
@@ -23,7 +35,9 @@
             "height": { "value": 0.3, "unit": "inches" }
           },
           "value": "{{first_name}} {{last_name}}",
-          "font_size": { "value": 16, "unit": "points" }
+          "font_size": { "value": 16, "unit": "points" },
+          "font": "print-forge-sans",
+          "color": "cmyk(0%, 0%, 0%, 100%)"
         },
         {
           "type": "text",
@@ -34,7 +48,9 @@
             "height": { "value": 0.2, "unit": "inches" }
           },
           "value": "{{title}}",
-          "font_size": { "value": 9, "unit": "points" }
+          "font_size": { "value": 9, "unit": "points" },
+          "font": "print-forge-sans",
+          "color": "cmyk(0%, 0%, 0%, 70%)"
         },
         {
           "type": "line",
@@ -42,7 +58,8 @@
           "y1": { "value": 0.9, "unit": "inches" },
           "x2": { "value": 3.1, "unit": "inches" },
           "y2": { "value": 0.9, "unit": "inches" },
-          "width": { "value": 0.5, "unit": "points" }
+          "width": { "value": 0.5, "unit": "points" },
+          "color": "cmyk(100%, 55%, 0%, 15%)"
         }
       ]
     }

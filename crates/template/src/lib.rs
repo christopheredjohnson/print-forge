@@ -1,5 +1,7 @@
 //! Renderer-independent template schema.
 
+use std::{fmt, str::FromStr};
+
 use serde::{Deserialize, Serialize};
 
 const POINTS_PER_INCH: f32 = 72.0;
@@ -54,12 +56,170 @@ impl Length {
     }
 }
 
+/// A strictly parsed device RGB or process CMYK print color.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Color {
+    Rgb {
+        red: u8,
+        green: u8,
+        blue: u8,
+    },
+    Cmyk {
+        cyan: f32,
+        magenta: f32,
+        yellow: f32,
+        black: f32,
+    },
+}
+
+impl Color {
+    #[must_use]
+    pub fn normalized(self) -> [f32; 4] {
+        match self {
+            Self::Rgb { red, green, blue } => [
+                f32::from(red) / 255.0,
+                f32::from(green) / 255.0,
+                f32::from(blue) / 255.0,
+                0.0,
+            ],
+            Self::Cmyk {
+                cyan,
+                magenta,
+                yellow,
+                black,
+            } => [cyan / 100.0, magenta / 100.0, yellow / 100.0, black / 100.0],
+        }
+    }
+}
+
+impl FromStr for Color {
+    type Err = ColorParseError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        if let Some(hex) = value.strip_prefix('#') {
+            if hex.len() != 6 || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                return Err(ColorParseError::new("hex colors must use exactly #RRGGBB"));
+            }
+            return Ok(Self::Rgb {
+                red: parse_hex(&hex[0..2])?,
+                green: parse_hex(&hex[2..4])?,
+                blue: parse_hex(&hex[4..6])?,
+            });
+        }
+
+        if let Some(body) = value
+            .strip_prefix("rgb(")
+            .and_then(|value| value.strip_suffix(')'))
+        {
+            let components = split_components(body, 3, "rgb")?;
+            return Ok(Self::Rgb {
+                red: parse_rgb_component(components[0])?,
+                green: parse_rgb_component(components[1])?,
+                blue: parse_rgb_component(components[2])?,
+            });
+        }
+
+        if let Some(body) = value
+            .strip_prefix("cmyk(")
+            .and_then(|value| value.strip_suffix(')'))
+        {
+            let components = split_components(body, 4, "cmyk")?;
+            return Ok(Self::Cmyk {
+                cyan: parse_percentage(components[0])?,
+                magenta: parse_percentage(components[1])?,
+                yellow: parse_percentage(components[2])?,
+                black: parse_percentage(components[3])?,
+            });
+        }
+
+        Err(ColorParseError::new(
+            "color must use #RRGGBB, rgb(R, G, B), or cmyk(C%, M%, Y%, K%)",
+        ))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ColorParseError {
+    message: String,
+}
+
+impl ColorParseError {
+    fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
+}
+
+impl fmt::Display for ColorParseError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for ColorParseError {}
+
+fn parse_hex(value: &str) -> Result<u8, ColorParseError> {
+    u8::from_str_radix(value, 16)
+        .map_err(|_| ColorParseError::new("hex colors must use exactly #RRGGBB"))
+}
+
+fn split_components<'a>(
+    value: &'a str,
+    expected: usize,
+    model: &str,
+) -> Result<Vec<&'a str>, ColorParseError> {
+    let components = value.split(',').map(str::trim).collect::<Vec<_>>();
+    if components.len() != expected || components.iter().any(|value| value.is_empty()) {
+        return Err(ColorParseError::new(format!(
+            "{model} colors require exactly {expected} components"
+        )));
+    }
+    Ok(components)
+}
+
+fn parse_rgb_component(value: &str) -> Result<u8, ColorParseError> {
+    value
+        .parse::<u8>()
+        .map_err(|_| ColorParseError::new("RGB components must be integers from 0 to 255"))
+}
+
+fn parse_percentage(value: &str) -> Result<f32, ColorParseError> {
+    let number = value
+        .strip_suffix('%')
+        .ok_or_else(|| ColorParseError::new("CMYK components must include a % suffix"))?
+        .parse::<f32>()
+        .map_err(|_| ColorParseError::new("CMYK components must be percentages from 0% to 100%"))?;
+    if !number.is_finite() || !(0.0..=100.0).contains(&number) {
+        return Err(ColorParseError::new(
+            "CMYK components must be percentages from 0% to 100%",
+        ));
+    }
+    Ok(number)
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Document {
     pub width: Length,
     pub height: Length,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bleed: Option<Length>,
+    #[serde(default)]
+    pub metadata: DocumentMetadata,
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DocumentMetadata {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub keywords: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identifier: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -334,11 +494,35 @@ fn default_color() -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::Length;
+    use super::{Color, Length};
 
     #[test]
     fn converts_supported_units_to_points() {
         assert_eq!(Length::inches(1.0).to_points(), 72.0);
         assert!((Length::millimeters(25.4).to_points() - 72.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn strictly_parses_rgb_and_cmyk_colors() {
+        assert_eq!(
+            "rgb(12, 34, 56)".parse::<Color>().unwrap(),
+            Color::Rgb {
+                red: 12,
+                green: 34,
+                blue: 56
+            }
+        );
+        assert_eq!(
+            "cmyk(0%, 25.5%, 50%, 100%)".parse::<Color>().unwrap(),
+            Color::Cmyk {
+                cyan: 0.0,
+                magenta: 25.5,
+                yellow: 50.0,
+                black: 100.0
+            }
+        );
+        assert!("#12345".parse::<Color>().is_err());
+        assert!("rgb(256, 0, 0)".parse::<Color>().is_err());
+        assert!("cmyk(0, 0%, 0%, 0%)".parse::<Color>().is_err());
     }
 }

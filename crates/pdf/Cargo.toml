@@ -7,9 +7,13 @@ license.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+lopdf.workspace = true
 print-forge-engine.workspace = true
 print-forge-template.workspace = true
 printpdf.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
 
 [lints]
 workspace = true

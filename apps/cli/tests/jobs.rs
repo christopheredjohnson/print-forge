@@ -188,3 +188,33 @@ fn continue_on_error_produces_partial_combined_output_and_failure_summary() {
             .any(|record| { record["row_index"] == 1 && record["status"] == "failed" })
     );
 }
+
+#[test]
+fn print_ready_mode_generates_valid_pdf_x_with_bleed_and_trim_boxes() {
+    let directory = TestDir::new("print-ready-job");
+    let examples = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples");
+    let template = examples.join("business-card.json");
+    let dataset = examples.join("people.csv");
+    let pdf = directory.path().join("print-ready.pdf");
+    let output = run(&[
+        "render",
+        template.to_str().unwrap(),
+        dataset.to_str().unwrap(),
+        pdf.to_str().unwrap(),
+        "--print-ready",
+    ]);
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let parsed = lopdf::Document::load(&pdf).unwrap();
+    let page = parsed.get_dictionary(parsed.get_pages()[&1]).unwrap();
+
+    assert_eq!(parsed.version, "1.6");
+    assert!(parsed.catalog().unwrap().has(b"OutputIntents"));
+    assert!(page.has(b"MediaBox"));
+    assert!(page.has(b"BleedBox"));
+    assert!(page.has(b"TrimBox"));
+}

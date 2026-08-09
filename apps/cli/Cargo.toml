@@ -21,6 +21,7 @@ serde.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]
+lopdf.workspace = true
 printpdf.workspace = true
 
 [lints]

@@ -69,6 +69,31 @@ output, but the command still exits unsuccessfully when any row fails. The JSON
 summary records status, successes, warnings, failures, output paths, per-row
 results, and elapsed milliseconds.
 
+## Print-ready output
+
+`--print-ready` enables the complete prepress profile: PDF/X-4 with a FOGRA39
+output intent, 300 DPI image preflight, mandatory embedded fonts, document
+metadata, and explicit media, bleed, crop, and trim boxes.
+
+```sh
+cargo run -- render examples/business-card.json examples/people.csv \
+  output/pdf/business-cards-print-ready.pdf \
+  --print-ready \
+  --summary output/jobs/business-cards-print-ready.json
+```
+
+The checks can also be selected independently with `--pdf-x x4`,
+`--min-image-dpi <DPI>`, and `--require-embedded-fonts`. PDF/X output is
+validated after serialization and rejected if its version, XMP declaration,
+output intent, ICC profile, page boxes, or embedded fonts are incomplete.
+
+Colors use one of three strict forms: `#RRGGBB`, `rgb(R, G, B)` with integer
+components from 0 to 255, or `cmyk(C%, M%, Y%, K%)` with percentages from 0 to
+100. Template metadata is configured under `document.metadata`; supported
+fields are `title`, `author`, `subject`, `keywords`, and `identifier`. When no
+identifier is supplied, Print Forge derives a stable one from the resolved
+document. Identical inputs produce byte-identical PDFs.
+
 The current renderer supports measured and wrapped absolute-positioned text,
 embedded font families, local PNG/JPEG images, rectangles, and lines. Asset
 paths are resolved relative to the template file. SVG, QR codes, and flow
@@ -127,12 +152,12 @@ each priority before moving to the next unless an item is clearly independent.
 
 ### 4. Produce print-ready files
 
-- [ ] Apply bleed to page geometry and expose trim, bleed, and media boxes.
-- [ ] Add RGB and CMYK color models with strict color parsing.
-- [ ] Add an image-resolution preflight with configurable minimum DPI.
-- [ ] Verify that every required font is embedded before accepting a job.
-- [ ] Define a PDF/X conformance target and validate generated files against it.
-- [ ] Add document metadata and deterministic output for repeatable builds.
+- [x] Apply bleed to page geometry and expose trim, bleed, and media boxes.
+- [x] Add RGB and CMYK color models with strict color parsing.
+- [x] Add an image-resolution preflight with configurable minimum DPI.
+- [x] Verify that every required font is embedded before accepting a job.
+- [x] Define a PDF/X conformance target and validate generated files against it.
+- [x] Add document metadata and deterministic output for repeatable builds.
 
 ### 5. Add flow layout and pagination
 

@@ -825,6 +825,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "lopdf",
  "print-forge-dataset",
  "print-forge-engine",
  "print-forge-pdf",
@@ -860,9 +861,11 @@ name = "print-forge-pdf"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "lopdf",
  "print-forge-engine",
  "print-forge-template",
  "printpdf",
+ "serde_json",
 ]
 
 [[package]]
