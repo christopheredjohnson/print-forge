@@ -264,3 +264,41 @@ fn mvp_table_fixture_wraps_rows_and_paginates() {
     assert_eq!(page_count(&pdf), 2);
     assert!(String::from_utf8_lossy(&output.stdout).contains("2 page(s)"));
 }
+
+#[test]
+fn composition_fixtures_render_repeated_labels_and_catalog_pages() {
+    let directory = TestDir::new("composition-job");
+    let examples = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples");
+    for (template_name, dataset_name, output_name, expected_pages) in [
+        (
+            "label-sheet.json",
+            "label-sheet-data.json",
+            "label-sheet.pdf",
+            1,
+        ),
+        (
+            "product-catalog.json",
+            "product-catalog-data.json",
+            "product-catalog.pdf",
+            2,
+        ),
+    ] {
+        let template = examples.join(template_name);
+        let dataset = examples.join(dataset_name);
+        let pdf = directory.path().join(output_name);
+        let output = run(&[
+            "render",
+            template.to_str().unwrap(),
+            dataset.to_str().unwrap(),
+            pdf.to_str().unwrap(),
+        ]);
+
+        assert!(
+            output.status.success(),
+            "{}: {}",
+            template_name,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(page_count(&pdf), expected_pages, "{template_name}");
+    }
+}

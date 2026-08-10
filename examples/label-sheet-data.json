@@ -1,0 +1,17 @@
+[
+  {
+    "batch": "AUG-2026",
+    "recipients": [
+      { "name": "Ada Lovelace", "address": "12 Analytical Engine Way", "city": "London", "state": "LN", "postal_code": "W1A 1AA" },
+      { "name": "Grace Hopper", "address": "44 Compiler Court", "city": "Arlington", "state": "VA", "postal_code": "22201" },
+      { "name": "Katherine Johnson", "address": "101 Orbital Avenue", "city": "Hampton", "state": "VA", "postal_code": "23666" },
+      { "name": "Margaret Hamilton", "address": "11 Apollo Lane", "city": "Cambridge", "state": "MA", "postal_code": "02139" },
+      { "name": "Mary Jackson", "address": "8 Wind Tunnel Road", "city": "Hampton", "state": "VA", "postal_code": "23666" },
+      { "name": "Dorothy Vaughan", "address": "32 Calculation Place", "city": "Newport News", "state": "VA", "postal_code": "23607" },
+      { "name": "Radia Perlman", "address": "7 Spanning Tree Terrace", "city": "Redmond", "state": "WA", "postal_code": "98052" },
+      { "name": "Annie Easley", "address": "55 Centaur Drive", "city": "Cleveland", "state": "OH", "postal_code": "44135" },
+      { "name": "Evelyn Boyd Granville", "address": "24 Numerical Street", "city": "Washington", "state": "DC", "postal_code": "20001" },
+      { "name": "Frances Allen", "address": "90 Optimization Road", "city": "New York", "state": "NY", "postal_code": "10001" }
+    ]
+  }
+]
