@@ -114,8 +114,8 @@ fn rejects_invalid_element_dimensions_and_table_widths() {
                 },
                 "source": "items",
                 "columns": [
-                  { "field": "name", "header": "Name", "width": 0.4 },
-                  { "field": "price", "header": "Price", "width": 0.4 }
+                  { "field": "name", "header": "Name", "width": { "type": "percent", "value": 40 } },
+                  { "field": "price", "header": "Price", "width": { "type": "percent", "value": 40 } }
                 ]
               }
             ]
@@ -334,4 +334,118 @@ fn rejects_invalid_flow_layout_contracts() {
     assert!(codes.contains(&"flow.keep_together_page_break"));
     assert!(codes.contains(&"flow.missing_size_hint"));
     assert!(codes.contains(&"flow.page_break_in_horizontal_stack"));
+}
+
+#[test]
+fn accepts_mixed_width_tables_and_scalar_formatted_cells() {
+    let template = template(
+        r##"{
+          "name": "Valid table",
+          "document": {
+            "width": { "value": 120, "unit": "points" },
+            "height": { "value": 160, "unit": "points" }
+          },
+          "fields": [
+            { "name": "items", "field_type": "collection", "required": true }
+          ],
+          "pages": [{ "elements": [{
+            "type": "table",
+            "position": {
+              "x": { "value": 10, "unit": "points" },
+              "y": { "value": 10, "unit": "points" },
+              "width": { "value": 100, "unit": "points" },
+              "height": { "value": 140, "unit": "points" }
+            },
+            "source": "items",
+            "header": true,
+            "header_background": "#EEEEEE",
+            "alternate_row_background": "rgb(248, 248, 248)",
+            "border": {
+              "width": { "value": 0.5, "unit": "points" },
+              "color": "#333333"
+            },
+            "columns": [
+              {
+                "field": "description",
+                "header": "Description",
+                "width": {
+                  "type": "fixed",
+                  "value": { "value": 40, "unit": "points" }
+                }
+              },
+              {
+                "field": "amount",
+                "header": "Amount",
+                "width": { "type": "percent", "value": 60 },
+                "align": "right",
+                "format": { "type": "currency", "symbol": "$", "decimals": 2 }
+              }
+            ]
+          }] }]
+        }"##,
+    );
+    let dataset = Dataset::from_json_reader(
+        r#"[{"items":[{"description":"Paper","amount":1234.5}]}]"#.as_bytes(),
+    )
+    .unwrap();
+
+    let report = validate_job(&template, &dataset);
+    assert!(report.is_valid(), "{:#?}", report.diagnostics());
+}
+
+#[test]
+fn rejects_invalid_table_formats_and_nested_cell_content() {
+    let template = template(
+        r##"{
+          "name": "Invalid table data",
+          "document": {
+            "width": { "value": 120, "unit": "points" },
+            "height": { "value": 160, "unit": "points" }
+          },
+          "pages": [{ "elements": [{
+            "type": "table",
+            "position": {
+              "x": { "value": 10, "unit": "points" },
+              "y": { "value": 10, "unit": "points" },
+              "width": { "value": 100, "unit": "points" },
+              "height": { "value": 140, "unit": "points" }
+            },
+            "source": "items",
+            "columns": [
+              {
+                "field": "amount",
+                "header": "Amount",
+                "width": { "type": "percent", "value": 30 },
+                "format": { "type": "currency", "symbol": "", "decimals": 13 }
+              },
+              {
+                "field": "date",
+                "header": "Date",
+                "width": { "type": "percent", "value": 30 },
+                "format": { "type": "date", "style": "us" }
+              },
+              {
+                "field": "details",
+                "header": "Details",
+                "width": { "type": "percent", "value": 40 }
+              }
+            ]
+          }] }]
+        }"##,
+    );
+    let dataset = Dataset::from_json_reader(
+        r#"[{"items":[{"amount":"not-a-number","date":"2026-02-30","details":{"nested":true}}]}]"#
+            .as_bytes(),
+    )
+    .unwrap();
+
+    let report = validate_job(&template, &dataset);
+    let codes = report
+        .errors()
+        .map(|diagnostic| diagnostic.code)
+        .collect::<Vec<_>>();
+    assert!(codes.contains(&"table.invalid_format"));
+    assert!(codes.contains(&"table.invalid_number"));
+    assert!(codes.contains(&"table.invalid_date"));
+    assert!(codes.contains(&"table.nested_cell"));
 }

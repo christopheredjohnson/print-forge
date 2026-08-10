@@ -89,6 +89,10 @@ cargo run -- render examples/business-card.json examples/people.csv \
 # Render the flow-layout and pagination fixture.
 cargo run -- render examples/flow-layout.json examples/flow-layout-data.json \
   output/pdf/flow-layout.pdf
+
+# Render the paginated invoice-table fixture.
+cargo run -- render examples/table-invoice.json examples/table-invoice-data.json \
+  output/pdf/table-invoice.pdf
 ```
 
 ## Output and template behavior
@@ -133,10 +137,28 @@ commands are reused on every continuation page generated from that template
 page. Flow items are currently atomic across page boundaries; text and images
 are moved as units rather than split internally.
 
+### MVP tables
+
+A positioned top-level `table` reads an array of objects from its `source`.
+Columns use either a physical fixed width or a percentage of the table region;
+all resolved column widths must exactly fill that region. Cell text wraps and
+determines row height before pagination. Rows remain atomic, continuation pages
+repeat the table header, and the template page's reusable header and footer are
+also preserved.
+
+Tables support uniform cell padding, grid borders, header/body/alternating row
+backgrounds, and per-column text alignment. Column formats include grouped
+numbers, symbol-prefixed currency, and validated ISO `YYYY-MM-DD` dates rendered
+as ISO, US, European, or long dates.
+
+The MVP deliberately accepts scalar cell values only. Table rows must be
+objects; merged cells, nested tables, arbitrary cell children, and custom cell
+layouts are rejected rather than silently simplified.
+
 The current renderer supports measured and wrapped text, embedded font
-families, local PNG/JPEG images, rectangles, lines, stacks, and pagination.
-Asset paths are resolved relative to the template file. SVG, QR codes, tables,
-groups, and repeaters remain explicit implementation errors.
+families, local PNG/JPEG images, rectangles, lines, stacks, tables, and
+pagination. Asset paths are resolved relative to the template file. SVG, QR
+codes, groups, and repeaters remain explicit implementation errors.
 
 ## Development
 
@@ -217,13 +239,13 @@ each priority before moving to the next unless an item is clearly independent.
 
 ### 6. Implement MVP tables
 
-- [ ] Support fixed and percentage column widths.
-- [ ] Support header rows, cell padding, borders, backgrounds, and text
+- [x] Support fixed and percentage column widths.
+- [x] Support header rows, cell padding, borders, backgrounds, and text
       alignment.
-- [ ] Calculate row heights from wrapped cell contents.
-- [ ] Split tables across pages and repeat the header row.
-- [ ] Add per-column value formatting for numbers, currency, and dates.
-- [ ] Explicitly reject merged cells, nested tables, and arbitrary cell layouts
+- [x] Calculate row heights from wrapped cell contents.
+- [x] Split tables across pages and repeat the header row.
+- [x] Add per-column value formatting for numbers, currency, and dates.
+- [x] Explicitly reject merged cells, nested tables, and arbitrary cell layouts
       for the MVP.
 
 ### 7. Add reusable composition and repetition

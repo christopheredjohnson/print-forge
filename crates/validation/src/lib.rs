@@ -5,7 +5,7 @@ use std::{collections::HashSet, fmt};
 use print_forge_dataset::{DataRow, Dataset};
 use print_forge_template::{
     Bounds, Color, DocumentMetadata, Element, Field, FieldType, FontFamily, Length, Page,
-    StackDirection, StackElement, TableElement, Template,
+    StackDirection, StackElement, TableColumnWidth, TableElement, TableValueFormat, Template,
 };
 
 pub const SUPPORTED_SCHEMA_VERSION: u32 = 1;
@@ -205,7 +205,189 @@ pub fn validate_data_row(template: &Template, row: &DataRow, row_index: usize) -
     for field in &template.fields {
         validate_row_field(row, row_index, field, &mut report);
     }
+    for (page_index, page) in template.pages.iter().enumerate() {
+        for (section, elements) in [
+            ("header", &page.header),
+            ("footer", &page.footer),
+            ("elements", &page.elements),
+        ] {
+            for (element_index, element) in elements.iter().enumerate() {
+                validate_table_data(
+                    element,
+                    &format!("pages[{page_index}].{section}[{element_index}]"),
+                    row,
+                    row_index,
+                    &mut report,
+                );
+            }
+        }
+    }
     report
+}
+
+fn validate_table_data(
+    element: &Element,
+    template_path: &str,
+    row: &DataRow,
+    row_index: usize,
+    report: &mut ValidationReport,
+) {
+    match element {
+        Element::Table(table) => {
+            let source_path = format!("rows[{row_index}].{}", table.source);
+            let Some(value) = lookup_value(row, &table.source) else {
+                report.error(
+                    "table.missing_source",
+                    source_path,
+                    format!("{template_path} table source is missing"),
+                );
+                return;
+            };
+            let Some(rows) = value.as_array() else {
+                report.error(
+                    "table.invalid_source",
+                    source_path,
+                    format!("{template_path} table source must be an array"),
+                );
+                return;
+            };
+
+            for (table_row_index, table_row) in rows.iter().enumerate() {
+                let table_row_path = format!("{source_path}[{table_row_index}]");
+                let Some(table_row) = table_row.as_object() else {
+                    report.error(
+                        "table.invalid_row",
+                        table_row_path,
+                        "table rows must be objects",
+                    );
+                    continue;
+                };
+                for (column_index, column) in table.columns.iter().enumerate() {
+                    let cell_path = format!("{table_row_path}.{}", column.field);
+                    let Some(cell) = lookup_object_value(table_row, &column.field) else {
+                        report.error(
+                            "table.missing_cell",
+                            cell_path,
+                            format!(
+                                "table column {column_index} field {:?} is missing",
+                                column.field
+                            ),
+                        );
+                        continue;
+                    };
+                    if cell.is_array() || cell.is_object() {
+                        report.error(
+                            "table.nested_cell",
+                            cell_path,
+                            "table cells must be scalar values; nested tables and arbitrary cell layouts are not supported",
+                        );
+                        continue;
+                    }
+                    if let Some(format) = &column.format {
+                        validate_formatted_cell(cell, format, cell_path, report);
+                    }
+                }
+            }
+        }
+        Element::Group(group) => {
+            for (index, child) in group.children.iter().enumerate() {
+                validate_table_data(
+                    child,
+                    &format!("{template_path}.children[{index}]"),
+                    row,
+                    row_index,
+                    report,
+                );
+            }
+        }
+        Element::Stack(stack) => {
+            for (index, child) in stack.children.iter().enumerate() {
+                validate_table_data(
+                    child,
+                    &format!("{template_path}.children[{index}]"),
+                    row,
+                    row_index,
+                    report,
+                );
+            }
+        }
+        Element::Repeater(repeater) => validate_table_data(
+            &repeater.template,
+            &format!("{template_path}.template"),
+            row,
+            row_index,
+            report,
+        ),
+        _ => {}
+    }
+}
+
+fn validate_formatted_cell(
+    value: &serde_json::Value,
+    format: &TableValueFormat,
+    path: String,
+    report: &mut ValidationReport,
+) {
+    match format {
+        TableValueFormat::Number { .. } | TableValueFormat::Currency { .. } => {
+            let number = value
+                .as_f64()
+                .or_else(|| value.as_str().and_then(|value| value.parse::<f64>().ok()));
+            if number.is_none_or(|number| !number.is_finite()) {
+                report.error(
+                    "table.invalid_number",
+                    path,
+                    "number and currency formats require a finite numeric value",
+                );
+            }
+        }
+        TableValueFormat::Date { .. } => {
+            if value.as_str().and_then(parse_iso_date).is_none() {
+                report.error(
+                    "table.invalid_date",
+                    path,
+                    "date formats require a valid ISO date in YYYY-MM-DD form",
+                );
+            }
+        }
+    }
+}
+
+fn lookup_object_value<'a>(
+    object: &'a serde_json::Map<String, serde_json::Value>,
+    path: &str,
+) -> Option<&'a serde_json::Value> {
+    let mut segments = path.split('.');
+    let mut value = object.get(segments.next()?)?;
+    for segment in segments {
+        value = value.get(segment)?;
+    }
+    Some(value)
+}
+
+fn parse_iso_date(value: &str) -> Option<(i32, u32, u32)> {
+    let parts = value.split('-').collect::<Vec<_>>();
+    let [year, month, day] = parts.as_slice() else {
+        return None;
+    };
+    if year.len() != 4 || month.len() != 2 || day.len() != 2 {
+        return None;
+    }
+    let year = year.parse::<i32>().ok()?;
+    let month = month.parse::<u32>().ok()?;
+    let day = day.parse::<u32>().ok()?;
+    let max_day = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if is_leap_year(year) => 29,
+        2 => 28,
+        _ => return None,
+    };
+    (1..=max_day).contains(&day).then_some((year, month, day))
+}
+
+const fn is_leap_year(year: i32) -> bool {
+    year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)
 }
 
 fn validate_fields(fields: &[Field], report: &mut ValidationReport) {
@@ -514,6 +696,13 @@ fn validate_element(
                 position_context,
                 report,
             );
+            if position_context != PositionContext::Absolute {
+                report.error(
+                    "table.top_level_only",
+                    path,
+                    "MVP tables must be positioned top-level page elements",
+                );
+            }
             validate_table(table, path, report);
         }
         Element::Repeater(repeater) => {
@@ -633,8 +822,55 @@ fn validate_table(table: &TableElement, path: &str, report: &mut ValidationRepor
         return;
     }
 
-    let mut total_width = 0.0_f32;
+    validate_positive_length(
+        table.font_size,
+        format!("{path}.font_size"),
+        "table font size",
+        report,
+    );
+    if let Some(line_height) = table.line_height {
+        validate_positive_length(
+            line_height,
+            format!("{path}.line_height"),
+            "table line height",
+            report,
+        );
+    }
+    validate_nonnegative_length(
+        table.cell_padding,
+        format!("{path}.cell_padding"),
+        "table cell padding",
+        report,
+    );
+    validate_color(&table.color, format!("{path}.color"), report);
+    for (field, color) in [
+        ("header_background", table.header_background.as_deref()),
+        ("row_background", table.row_background.as_deref()),
+        (
+            "alternate_row_background",
+            table.alternate_row_background.as_deref(),
+        ),
+    ] {
+        if let Some(color) = color {
+            validate_color(color, format!("{path}.{field}"), report);
+        }
+    }
+    if let Some(border) = &table.border {
+        validate_positive_length(
+            border.width,
+            format!("{path}.border.width"),
+            "table border width",
+            report,
+        );
+        validate_color(&border.color, format!("{path}.border.color"), report);
+    }
+
+    let mut resolved_width = 0.0_f32;
     let mut all_widths_valid = true;
+    let table_width = table
+        .position
+        .as_ref()
+        .map(|position| position.width.to_points());
 
     for (index, column) in table.columns.iter().enumerate() {
         let column_path = format!("{path}.columns[{index}]");
@@ -647,23 +883,71 @@ fn validate_table(table: &TableElement, path: &str, report: &mut ValidationRepor
             );
         }
 
-        if !column.width.is_finite() || column.width <= 0.0 {
-            all_widths_valid = false;
-            report.error(
-                "table.invalid_column_width",
-                format!("{column_path}.width"),
-                "table column width must be a positive finite fraction",
-            );
-        } else {
-            total_width += column.width;
+        match column.width {
+            TableColumnWidth::Fixed { value } => {
+                let width = value.to_points();
+                if !width.is_finite() || width <= 0.0 {
+                    all_widths_valid = false;
+                    report.error(
+                        "table.invalid_column_width",
+                        format!("{column_path}.width.value"),
+                        "fixed table column width must be positive and finite",
+                    );
+                } else {
+                    resolved_width += width;
+                }
+            }
+            TableColumnWidth::Percent { value } => {
+                if !value.is_finite() || value <= 0.0 || value > 100.0 {
+                    all_widths_valid = false;
+                    report.error(
+                        "table.invalid_column_width",
+                        format!("{column_path}.width.value"),
+                        "percentage table column width must be greater than 0 and at most 100",
+                    );
+                } else if let Some(table_width) = table_width {
+                    resolved_width += table_width * value / 100.0;
+                }
+            }
+        }
+
+        if let Some(format) = &column.format {
+            match format {
+                TableValueFormat::Number { decimals }
+                | TableValueFormat::Currency { decimals, .. }
+                    if *decimals > 12 =>
+                {
+                    report.error(
+                        "table.invalid_format",
+                        format!("{column_path}.format.decimals"),
+                        "number and currency formats support at most 12 decimal places",
+                    );
+                }
+                TableValueFormat::Currency { symbol, .. } if symbol.trim().is_empty() => {
+                    report.error(
+                        "table.invalid_format",
+                        format!("{column_path}.format.symbol"),
+                        "currency symbol cannot be empty",
+                    );
+                }
+                _ => {}
+            }
         }
     }
 
-    if all_widths_valid && (total_width - 1.0).abs() > 0.001 {
+    if all_widths_valid
+        && let Some(table_width) = table_width
+        && table_width.is_finite()
+        && table_width > 0.0
+        && (resolved_width - table_width).abs() > 0.1
+    {
         report.error(
             "table.invalid_total_width",
             format!("{path}.columns"),
-            format!("table column width fractions must total 1.0; found {total_width:.4}"),
+            format!(
+                "resolved table column widths must equal the {:.2}pt table width; found {:.2}pt",
+                table_width, resolved_width
+            ),
         );
     }
 }
