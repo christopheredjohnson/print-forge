@@ -39,7 +39,8 @@ crates. Elements can be rotated with the canvas handle, an exact inspector
 value, or the 90-degree shortcuts. Layer controls move the selection backward,
 forward, fully behind, or fully in front. Non-printing rulers and page-specific
 guides support center lines, a quick 18pt margin set, exact point positions, and
-direct canvas dragging. Smart snapping aligns moves, resizes, and line endpoints
+creation by dragging from the top or left ruler. Existing guides can be dragged
+directly on the canvas. Smart snapping aligns moves, resizes, and line endpoints
 to page edges and centers, guides, and neighboring layer edges and centers;
 magenta feedback lines show the active alignment, and holding Option/Alt
 temporarily bypasses snapping. `Cmd/Ctrl+;` toggles guides and

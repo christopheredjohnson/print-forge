@@ -78,6 +78,13 @@ struct EditorGuide {
     position_pt: f32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct GuideDraft {
+    axis: GuideAxis,
+    position_pt: f32,
+    valid: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ElementDragKind {
     Translate,
@@ -185,6 +192,7 @@ pub struct StudioApp {
     show_guides: bool,
     snap_enabled: bool,
     active_drag: Option<ElementDragState>,
+    guide_draft: Option<GuideDraft>,
 }
 
 impl StudioApp {
@@ -242,6 +250,7 @@ impl StudioApp {
             show_guides,
             snap_enabled,
             active_drag: None,
+            guide_draft: None,
         }
     }
 
@@ -255,6 +264,7 @@ impl StudioApp {
         self.preview_page = 0;
         self.guides = vec![Vec::new()];
         self.active_drag = None;
+        self.guide_draft = None;
         self.asset_cache.textures.clear();
         self.selection = Selection::Document;
         self.dirty = false;
@@ -284,6 +294,7 @@ impl StudioApp {
                 self.preview_page = 0;
                 self.guides = vec![Vec::new(); self.template.pages.len()];
                 self.active_drag = None;
+                self.guide_draft = None;
                 self.asset_cache.textures.clear();
                 self.selection = Selection::Document;
                 self.dirty = false;
@@ -549,6 +560,7 @@ impl StudioApp {
                         {
                             self.current_page = page_index;
                             self.active_drag = None;
+                            self.guide_draft = None;
                             self.selection = Selection::Page;
                         }
                     }
@@ -1289,12 +1301,13 @@ impl StudioApp {
                         }
                     }
                     if self.show_guides {
-                        paint_rulers(
+                        paint_and_interact_rulers(
+                            ui,
                             &painter,
                             page_rect,
-                            page_width,
-                            page_height,
                             scale,
+                            &mut self.guides[self.current_page],
+                            &mut self.guide_draft,
                         );
                         paint_and_interact_guides(
                             ui,
@@ -1305,6 +1318,8 @@ impl StudioApp {
                             page_height,
                             &mut self.guides[self.current_page],
                         );
+                    } else {
+                        self.guide_draft = None;
                     }
                     paint_snap_feedback(&painter, page_rect, scale, snap_feedback);
                 } else if let Err(error) = &preview {
@@ -2742,14 +2757,17 @@ fn line_endpoint_position(element: &Element, endpoint: LineEndpoint) -> Option<[
     })
 }
 
-fn paint_rulers(
+fn paint_and_interact_rulers(
+    ui: &mut egui::Ui,
     painter: &egui::Painter,
     page: Rect,
-    page_width: f32,
-    page_height: f32,
     scale: f32,
+    guides: &mut Vec<EditorGuide>,
+    draft: &mut Option<GuideDraft>,
 ) {
     const RULER_SIZE: f32 = 22.0;
+    let page_width = page.width() / scale;
+    let page_height = page.height() / scale;
     let background = Color32::from_rgb(42, 48, 53);
     let tick_color = Color32::from_gray(145);
     let top = Rect::from_min_max(
@@ -2823,6 +2841,114 @@ fn paint_rulers(
             );
         }
         y += minor_step;
+    }
+
+    let top_response = ui
+        .interact(top, Id::new("horizontal-guide-ruler"), Sense::drag())
+        .on_hover_text("Drag down to create a horizontal guide");
+    let left_response = ui
+        .interact(left, Id::new("vertical-guide-ruler"), Sense::drag())
+        .on_hover_text("Drag right to create a vertical guide");
+    if top_response.hovered() || top_response.dragged() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
+    }
+    if left_response.hovered() || left_response.dragged() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+    }
+    if let Some(guide) =
+        update_ruler_guide_draft(ui, &top_response, GuideAxis::Horizontal, page, scale, draft)
+    {
+        push_editor_guide(guides, guide);
+    }
+    if let Some(guide) =
+        update_ruler_guide_draft(ui, &left_response, GuideAxis::Vertical, page, scale, draft)
+    {
+        push_editor_guide(guides, guide);
+    }
+    if let Some(draft) = draft.as_ref().filter(|draft| draft.valid) {
+        paint_guide_line(
+            painter,
+            page,
+            scale,
+            EditorGuide {
+                axis: draft.axis,
+                position_pt: draft.position_pt,
+            },
+            Color32::from_rgb(85, 215, 246),
+            2.0,
+        );
+    }
+}
+
+fn update_ruler_guide_draft(
+    ui: &egui::Ui,
+    response: &egui::Response,
+    axis: GuideAxis,
+    page: Rect,
+    scale: f32,
+    draft: &mut Option<GuideDraft>,
+) -> Option<EditorGuide> {
+    if response.dragged()
+        && let Some(pointer) = ui.input(|input| input.pointer.latest_pos())
+    {
+        let (position_pt, valid) = guide_position_from_pointer(axis, pointer, page, scale);
+        *draft = Some(GuideDraft {
+            axis,
+            position_pt,
+            valid,
+        });
+    }
+    if response.drag_stopped() && draft.is_some_and(|draft| draft.axis == axis) {
+        let completed = draft.take().filter(|draft| draft.valid);
+        return completed.map(|draft| EditorGuide {
+            axis: draft.axis,
+            position_pt: draft.position_pt,
+        });
+    }
+    None
+}
+
+fn guide_position_from_pointer(
+    axis: GuideAxis,
+    pointer: Pos2,
+    page: Rect,
+    scale: f32,
+) -> (f32, bool) {
+    match axis {
+        GuideAxis::Vertical => (
+            ((pointer.x - page.left()) / scale).clamp(0.0, page.width() / scale),
+            (page.left()..=page.right()).contains(&pointer.x),
+        ),
+        GuideAxis::Horizontal => (
+            ((page.bottom() - pointer.y) / scale).clamp(0.0, page.height() / scale),
+            (page.top()..=page.bottom()).contains(&pointer.y),
+        ),
+    }
+}
+
+fn paint_guide_line(
+    painter: &egui::Painter,
+    page: Rect,
+    scale: f32,
+    guide: EditorGuide,
+    color: Color32,
+    width: f32,
+) {
+    match guide.axis {
+        GuideAxis::Vertical => {
+            let x = page.left() + guide.position_pt * scale;
+            painter.line_segment(
+                [Pos2::new(x, page.top()), Pos2::new(x, page.bottom())],
+                Stroke::new(width, color),
+            );
+        }
+        GuideAxis::Horizontal => {
+            let y = page.bottom() - guide.position_pt * scale;
+            painter.line_segment(
+                [Pos2::new(page.left(), y), Pos2::new(page.right(), y)],
+                Stroke::new(width, color),
+            );
+        }
     }
 }
 
@@ -3468,8 +3594,8 @@ mod tests {
     use super::{
         EditorGuide, ElementDragKind, ElementDragState, GuideAxis, PersistedState,
         PreviewErrorCopy, ScreenTransform, alignment_targets, first_template_variable,
-        inverse_rotate_vector, parse_color, preview_error_copy, print_color, push_editor_guide,
-        resolve_preview, rgb_hex, safe_stem, serialize_template,
+        guide_position_from_pointer, inverse_rotate_vector, parse_color, preview_error_copy,
+        print_color, push_editor_guide, resolve_preview, rgb_hex, safe_stem, serialize_template,
     };
     use crate::model::{ElementKind, new_element, starter_template};
 
@@ -3540,6 +3666,25 @@ mod tests {
         assert_eq!(first, Vec2::new(3.0, -2.0));
         assert_eq!(second, Vec2::new(7.0, -7.0));
         assert_eq!(returned_original, original);
+    }
+
+    #[test]
+    fn ruler_drags_map_to_page_guide_coordinates() {
+        let page =
+            eframe::egui::Rect::from_min_max(Pos2::new(100.0, 100.0), Pos2::new(500.0, 700.0));
+
+        assert_eq!(
+            guide_position_from_pointer(GuideAxis::Vertical, Pos2::new(300.0, 80.0), page, 2.0,),
+            (100.0, true)
+        );
+        assert_eq!(
+            guide_position_from_pointer(GuideAxis::Horizontal, Pos2::new(550.0, 500.0), page, 2.0,),
+            (100.0, true)
+        );
+        assert_eq!(
+            guide_position_from_pointer(GuideAxis::Vertical, Pos2::new(80.0, 300.0), page, 2.0,),
+            (0.0, false)
+        );
     }
 
     #[test]
