@@ -1938,13 +1938,13 @@ fn element_properties(ui: &mut egui::Ui, element: &mut Element) -> bool {
                     (TextOverflow::Shrink, "Shrink"),
                 ],
             );
-            changed |= string_editor(ui, "Color", &mut text.color);
+            changed |= color_editor(ui, "Color", &mut text.color);
         }
         Element::Rectangle(rectangle) => {
             section_label(ui, "APPEARANCE");
-            changed |= optional_text(ui, "Fill", &mut rectangle.fill);
+            changed |= optional_color_editor(ui, "Fill", &mut rectangle.fill);
             if let Some(stroke) = &mut rectangle.stroke {
-                changed |= string_editor(ui, "Stroke color", &mut stroke.color);
+                changed |= color_editor(ui, "Stroke color", &mut stroke.color);
                 changed |= length_editor(ui, "Stroke width", &mut stroke.width, "rect-stroke");
                 if ui.small_button("Remove stroke").clicked() {
                     rectangle.stroke = None;
@@ -1987,8 +1987,8 @@ fn element_properties(ui: &mut egui::Ui, element: &mut Element) -> bool {
             changed |= ui
                 .add(egui::DragValue::new(&mut qr.quiet_zone).range(4..=32))
                 .changed();
-            changed |= string_editor(ui, "Color", &mut qr.color);
-            changed |= string_editor(ui, "Background", &mut qr.background);
+            changed |= color_editor(ui, "Color", &mut qr.color);
+            changed |= color_editor(ui, "Background", &mut qr.background);
         }
         Element::Barcode(barcode) => {
             section_label(ui, "CODE 128");
@@ -1997,8 +1997,8 @@ fn element_properties(ui: &mut egui::Ui, element: &mut Element) -> bool {
             changed |= ui
                 .add(egui::DragValue::new(&mut barcode.quiet_zone).range(10..=64))
                 .changed();
-            changed |= string_editor(ui, "Color", &mut barcode.color);
-            changed |= string_editor(ui, "Background", &mut barcode.background);
+            changed |= color_editor(ui, "Color", &mut barcode.color);
+            changed |= color_editor(ui, "Background", &mut barcode.background);
         }
         Element::Line(line) => {
             section_label(ui, "LINE");
@@ -2007,7 +2007,7 @@ fn element_properties(ui: &mut egui::Ui, element: &mut Element) -> bool {
             changed |= length_editor(ui, "X2", &mut line.x2, "line-x2");
             changed |= length_editor(ui, "Y2", &mut line.y2, "line-y2");
             changed |= length_editor(ui, "Width", &mut line.width, "line-width");
-            changed |= string_editor(ui, "Color", &mut line.color);
+            changed |= color_editor(ui, "Color", &mut line.color);
         }
         Element::Group(_)
         | Element::Stack(_)
@@ -2119,6 +2119,67 @@ fn string_editor(ui: &mut egui::Ui, label: &str, value: &mut String) -> bool {
     ui.text_edit_singleline(value).changed()
 }
 
+fn color_editor(ui: &mut egui::Ui, label: &str, value: &mut String) -> bool {
+    ui.label(label);
+    color_value_editor(ui, value)
+}
+
+fn optional_color_editor(ui: &mut egui::Ui, label: &str, value: &mut Option<String>) -> bool {
+    let mut enabled = value.is_some();
+    let mut changed = ui.checkbox(&mut enabled, label).changed();
+    if enabled && value.is_none() {
+        *value = Some("#FFFFFF".to_owned());
+        changed = true;
+    } else if !enabled && value.is_some() {
+        *value = None;
+        changed = true;
+    }
+    if let Some(value) = value {
+        changed |= color_value_editor(ui, value);
+    }
+    changed
+}
+
+fn color_value_editor(ui: &mut egui::Ui, value: &mut String) -> bool {
+    let parsed = value.parse::<PrintColor>();
+    let screen_color = parsed
+        .as_ref()
+        .map_or(CHARCOAL, |color| print_color(*color));
+    let mut rgb = [screen_color.r(), screen_color.g(), screen_color.b()];
+    let changed = ui
+        .horizontal(|ui| {
+            let mut changed = false;
+            if ui
+                .color_edit_button_srgb(&mut rgb)
+                .on_hover_text("Choose an RGB color")
+                .changed()
+            {
+                *value = rgb_hex(rgb);
+                changed = true;
+            }
+            changed |= ui
+                .add_sized(
+                    [ui.available_width(), 24.0],
+                    egui::TextEdit::singleline(value).hint_text("#RRGGBB"),
+                )
+                .changed();
+            changed
+        })
+        .inner;
+    if value.parse::<PrintColor>().is_err() {
+        ui.label(
+            RichText::new("Use #RRGGBB, rgb(R, G, B), or cmyk(C%, M%, Y%, K%).")
+                .size(10.0)
+                .color(Color32::from_rgb(242, 111, 111)),
+        );
+    }
+    changed
+}
+
+fn rgb_hex(rgb: [u8; 3]) -> String {
+    format!("#{:02X}{:02X}{:02X}", rgb[0], rgb[1], rgb[2])
+}
+
 fn optional_text(ui: &mut egui::Ui, label: &str, value: &mut Option<String>) -> bool {
     let mut text = value.clone().unwrap_or_default();
     let changed = string_editor(ui, label, &mut text);
@@ -2169,23 +2230,10 @@ fn small_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
 }
 
 fn parse_color(value: &str) -> Color32 {
-    let value = value.trim();
-    if let Some(hex) = value.strip_prefix('#') {
-        if hex.len() == 6 {
-            if let (Ok(red), Ok(green), Ok(blue)) = (
-                u8::from_str_radix(&hex[0..2], 16),
-                u8::from_str_radix(&hex[2..4], 16),
-                u8::from_str_radix(&hex[4..6], 16),
-            ) {
-                return Color32::from_rgb(red, green, blue);
-            }
-        }
-    }
-    if value.eq_ignore_ascii_case("#ffffff") {
-        Color32::WHITE
-    } else {
-        CHARCOAL
-    }
+    value
+        .trim()
+        .parse::<PrintColor>()
+        .map_or(CHARCOAL, print_color)
 }
 
 const fn unit_label(unit: Unit) -> &'static str {
@@ -2259,8 +2307,8 @@ mod tests {
     use print_forge_template::{Color as PrintColor, Element};
 
     use super::{
-        PreviewErrorCopy, preview_error_copy, print_color, resolve_preview, safe_stem,
-        serialize_template,
+        PreviewErrorCopy, parse_color, preview_error_copy, print_color, resolve_preview, rgb_hex,
+        safe_stem, serialize_template,
     };
     use crate::model::starter_template;
 
@@ -2303,6 +2351,15 @@ mod tests {
                 yellow: 0.0,
                 black: 0.0,
             }),
+            Color32::from_rgb(0, 255, 255)
+        );
+    }
+
+    #[test]
+    fn color_controls_preserve_exact_rgb_strings_and_preview_cmyk() {
+        assert_eq!(rgb_hex([0, 15, 255]), "#000FFF");
+        assert_eq!(
+            parse_color("cmyk(100%, 0%, 0%, 0%)"),
             Color32::from_rgb(0, 255, 255)
         );
     }
