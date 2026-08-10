@@ -311,13 +311,35 @@ fn validate_table_data(
                 );
             }
         }
-        Element::Repeater(repeater) => validate_table_data(
-            &repeater.template,
-            &format!("{template_path}.template"),
-            row,
-            row_index,
-            report,
-        ),
+        Element::Repeater(repeater) => {
+            let source_path = format!("rows[{row_index}].{}", repeater.source);
+            let Some(value) = lookup_value(row, &repeater.source) else {
+                report.error(
+                    "repeater.missing_source",
+                    source_path,
+                    format!("repeater source {:?} is missing", repeater.source),
+                );
+                return;
+            };
+            let Some(items) = value.as_array() else {
+                report.error(
+                    "repeater.invalid_source",
+                    source_path,
+                    "repeater source must be an array",
+                );
+                return;
+            };
+            for (item_index, item) in items.iter().enumerate() {
+                let scope = repeat_item_scope(row, item, item_index);
+                validate_table_data(
+                    &repeater.template,
+                    &format!("{template_path}.items[{item_index}].template"),
+                    &scope,
+                    row_index,
+                    report,
+                );
+            }
+        }
         _ => {}
     }
 }
@@ -666,14 +688,26 @@ fn validate_element(
             );
         }
         Element::Group(group) => {
+            validate_required_flow_size_hint(
+                group.position.as_ref(),
+                path,
+                "group",
+                position_context,
+                report,
+            );
             if let Some(position) = &group.position {
                 validate_bounds(position, &format!("{path}.position"), canvas, report);
             }
+            let child_canvas = group.position.as_ref().map_or(canvas, |position| Canvas {
+                width: position.width.to_points(),
+                height: position.height.to_points(),
+                bleed: 0.0,
+            });
             for (index, child) in group.children.iter().enumerate() {
                 validate_element(
                     child,
                     &format!("{path}.children[{index}]"),
-                    canvas,
+                    child_canvas,
                     PositionContext::Absolute,
                     report,
                 );
@@ -713,11 +747,25 @@ fn validate_element(
                     "repeater source cannot be empty",
                 );
             }
+            if position_context != PositionContext::Absolute {
+                report.error(
+                    "repeater.top_level_only",
+                    path,
+                    "repeaters must be top-level page elements",
+                );
+            }
+            if position_bounds(&repeater.template).is_none() {
+                report.error(
+                    "repeater.missing_item_bounds",
+                    format!("{path}.template.position"),
+                    "repeater template requires position bounds for its first item slot",
+                );
+            }
             validate_element(
                 &repeater.template,
                 &format!("{path}.template"),
                 canvas,
-                PositionContext::Flow(StackDirection::Vertical),
+                PositionContext::Absolute,
                 report,
             );
         }
@@ -1143,6 +1191,39 @@ fn lookup_value<'a>(row: &'a DataRow, path: &str) -> Option<&'a serde_json::Valu
     }
 
     Some(value)
+}
+
+fn repeat_item_scope(data: &DataRow, item: &serde_json::Value, item_index: usize) -> DataRow {
+    let root = data
+        .get("root")
+        .and_then(serde_json::Value::as_object)
+        .cloned()
+        .unwrap_or_else(|| data.clone());
+    let mut scope = root.clone();
+    if let Some(object) = item.as_object() {
+        scope.extend(object.clone());
+    }
+    scope.insert("root".to_owned(), serde_json::Value::Object(root));
+    scope.insert("item".to_owned(), item.clone());
+    scope.insert(
+        "index".to_owned(),
+        serde_json::Value::Number(serde_json::Number::from(item_index + 1)),
+    );
+    scope
+}
+
+fn position_bounds(element: &Element) -> Option<&Bounds> {
+    match element {
+        Element::Text(element) => element.position.as_ref(),
+        Element::Image(element) => element.position.as_ref(),
+        Element::Rectangle(element) => element.position.as_ref(),
+        Element::Svg(element) => element.position.as_ref(),
+        Element::QrCode(element) => element.position.as_ref(),
+        Element::Group(element) => element.position.as_ref(),
+        Element::Stack(element) => element.position.as_ref(),
+        Element::Table(element) => element.position.as_ref(),
+        Element::Line(_) | Element::Repeater(_) | Element::PageBreak => None,
+    }
 }
 
 fn value_matches_field_type(value: &serde_json::Value, field_type: FieldType) -> bool {

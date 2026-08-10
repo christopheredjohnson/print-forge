@@ -1,0 +1,118 @@
+{
+  "schema_version": 1,
+  "name": "Reusable label sheet",
+  "document": {
+    "width": { "value": 612, "unit": "points" },
+    "height": { "value": 792, "unit": "points" },
+    "metadata": {
+      "title": "Print Forge label-sheet fixture",
+      "author": "Print Forge"
+    }
+  },
+  "fields": [
+    { "name": "batch", "field_type": "text", "required": true },
+    { "name": "recipients", "field_type": "collection", "required": true }
+  ],
+  "fonts": [
+    {
+      "name": "Helvetica",
+      "regular": "assets/fonts/Helvetica.ttf",
+      "bold": "assets/fonts/Helvetica-Bold.ttf"
+    }
+  ],
+  "pages": [
+    {
+      "header": [
+        {
+          "type": "text",
+          "position": {
+            "x": { "value": 36, "unit": "points" },
+            "y": { "value": 756, "unit": "points" },
+            "width": { "value": 540, "unit": "points" },
+            "height": { "value": 14, "unit": "points" }
+          },
+          "value": "PRINT FORGE / LABELS / {{batch}}",
+          "font": "Helvetica",
+          "font_style": "bold",
+          "font_size": { "value": 9, "unit": "points" },
+          "color": "#16324F"
+        }
+      ],
+      "elements": [
+        {
+          "type": "repeater",
+          "source": "recipients",
+          "layout": "grid",
+          "template": {
+            "type": "group",
+            "position": {
+              "x": { "value": 36, "unit": "points" },
+              "y": { "value": 648, "unit": "points" },
+              "width": { "value": 180, "unit": "points" },
+              "height": { "value": 90, "unit": "points" }
+            },
+            "children": [
+              {
+                "type": "rectangle",
+                "position": {
+                  "x": { "value": 0, "unit": "points" },
+                  "y": { "value": 0, "unit": "points" },
+                  "width": { "value": 180, "unit": "points" },
+                  "height": { "value": 90, "unit": "points" }
+                },
+                "fill": "#FFFFFF",
+                "stroke": {
+                  "width": { "value": 0.5, "unit": "points" },
+                  "color": "#9FB7C9"
+                }
+              },
+              {
+                "type": "text",
+                "position": {
+                  "x": { "value": 12, "unit": "points" },
+                  "y": { "value": 58, "unit": "points" },
+                  "width": { "value": 156, "unit": "points" },
+                  "height": { "value": 14, "unit": "points" }
+                },
+                "value": "{{name}}",
+                "font": "Helvetica",
+                "font_style": "bold",
+                "font_size": { "value": 10, "unit": "points" },
+                "overflow": "shrink",
+                "color": "#16324F"
+              },
+              {
+                "type": "text",
+                "position": {
+                  "x": { "value": 12, "unit": "points" },
+                  "y": { "value": 24, "unit": "points" },
+                  "width": { "value": 156, "unit": "points" },
+                  "height": { "value": 28, "unit": "points" }
+                },
+                "value": "{{address}}\n{{city}}, {{state}} {{postal_code}}",
+                "font": "Helvetica",
+                "font_size": { "value": 8, "unit": "points" },
+                "line_height": { "value": 10, "unit": "points" },
+                "overflow": "shrink",
+                "color": "#334E68"
+              },
+              {
+                "type": "text",
+                "position": {
+                  "x": { "value": 12, "unit": "points" },
+                  "y": { "value": 8, "unit": "points" },
+                  "width": { "value": 156, "unit": "points" },
+                  "height": { "value": 9, "unit": "points" }
+                },
+                "value": "{{root.batch}} / label {{index}}",
+                "font": "Helvetica",
+                "font_size": { "value": 6, "unit": "points" },
+                "color": "#829AB1"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}
