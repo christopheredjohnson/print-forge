@@ -1,16 +1,18 @@
 //! Layout contracts shared by template compilers and document renderers.
 
+use barcoders::sym::code128::Code128;
 use print_forge_dataset::DataRow;
+use qrcodegen::{QrCode, QrCodeEcc};
 use std::{
     fs,
     path::{Path, PathBuf},
 };
 
 use print_forge_template::{
-    Color, DashStyle, DocumentMetadata, Element, FlowOverflow, FontFamily, FontStyle, GroupElement,
-    ImageFit, RepeatLayout, RepeaterElement, StackDirection, StackElement, Stroke,
-    TableColumnWidth, TableDateStyle, TableElement, TableValueFormat, Template, TextAlign,
-    TextOverflow,
+    BarcodeElement, BarcodeFormat, Color, DashStyle, DocumentMetadata, Element, FlowOverflow,
+    FontFamily, FontStyle, GroupElement, ImageFit, QrCodeElement, QrErrorCorrection, RepeatLayout,
+    RepeaterElement, StackDirection, StackElement, Stroke, TableColumnWidth, TableDateStyle,
+    TableElement, TableValueFormat, Template, TextAlign, TextOverflow,
 };
 use thiserror::Error;
 
@@ -42,6 +44,8 @@ pub enum DrawCommand {
     Rectangle(RectangleCommand),
     Line(LineCommand),
     Svg(SvgCommand),
+    QrCode(QrCodeCommand),
+    Barcode(BarcodeCommand),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -95,7 +99,27 @@ pub struct LineCommand {
 #[derive(Debug, Clone, PartialEq)]
 pub struct SvgCommand {
     pub bounds: Rect,
-    pub source: String,
+    pub source: PathBuf,
+    pub fit: ImageFit,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct QrCodeCommand {
+    pub bounds: Rect,
+    pub size: usize,
+    pub modules: Vec<bool>,
+    pub quiet_zone: u8,
+    pub color: Color,
+    pub background: Color,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct BarcodeCommand {
+    pub bounds: Rect,
+    pub modules: Vec<bool>,
+    pub quiet_zone: u8,
+    pub color: Color,
+    pub background: Color,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -633,6 +657,7 @@ fn element_bounds(element: &Element) -> Option<&print_forge_template::Bounds> {
         Element::Rectangle(element) => element.position.as_ref(),
         Element::Svg(element) => element.position.as_ref(),
         Element::QrCode(element) => element.position.as_ref(),
+        Element::Barcode(element) => element.position.as_ref(),
         Element::Group(element) => element.position.as_ref(),
         Element::Stack(element) => element.position.as_ref(),
         Element::Table(element) => element.position.as_ref(),
@@ -1487,6 +1512,16 @@ fn measure_element(
             .as_ref()
             .map(measured_bounds)
             .ok_or_else(|| flow_size_hint_missing("svg")),
+        Element::QrCode(qr_code) => qr_code
+            .position
+            .as_ref()
+            .map(measured_bounds)
+            .ok_or_else(|| flow_size_hint_missing("qr_code")),
+        Element::Barcode(barcode) => barcode
+            .position
+            .as_ref()
+            .map(measured_bounds)
+            .ok_or_else(|| flow_size_hint_missing("barcode")),
         Element::Stack(stack) => {
             if let Some(position) = &stack.position {
                 Ok(measured_bounds(position))
@@ -1497,7 +1532,6 @@ fn measure_element(
         Element::Line(_) => Err(ElementLayoutError::InvalidLayout(
             "line elements use absolute coordinates and cannot be flow children".to_owned(),
         )),
-        Element::QrCode(_) => Err(ElementLayoutError::UnsupportedElement("qr_code")),
         Element::Group(group) => group
             .position
             .as_ref()
@@ -1794,10 +1828,25 @@ fn layout_element_at(
 
             Ok(DrawCommand::Svg(SvgCommand {
                 bounds,
-                source: resolve_string(&svg.source, data)?,
+                source: resolve_asset_path(
+                    &options.asset_base,
+                    &resolve_string(&svg.source, data)?,
+                ),
+                fit: svg.fit,
             }))
         }
-        Element::QrCode(_) => Err(ElementLayoutError::UnsupportedElement("qr_code")),
+        Element::QrCode(qr_code) => {
+            let bounds = assigned_bounds
+                .or_else(|| qr_code.position.as_ref().map(resolve_bounds))
+                .ok_or_else(|| missing_position("qr_code"))?;
+            build_qr_code_command(qr_code, bounds, data).map(DrawCommand::QrCode)
+        }
+        Element::Barcode(barcode) => {
+            let bounds = assigned_bounds
+                .or_else(|| barcode.position.as_ref().map(resolve_bounds))
+                .ok_or_else(|| missing_position("barcode"))?;
+            build_barcode_command(barcode, bounds, data).map(DrawCommand::Barcode)
+        }
         Element::Group(_) => Err(ElementLayoutError::UnsupportedElement("group")),
         Element::Stack(_) => Err(ElementLayoutError::InvalidLayout(
             "stack elements must be laid out through the flow layout contract".to_owned(),
@@ -1810,6 +1859,117 @@ fn layout_element_at(
             "page breaks are only valid between flow items".to_owned(),
         )),
     }
+}
+
+const MIN_SCANNABLE_MODULE_PT: f32 = 0.5;
+const MIN_BARCODE_HEIGHT_PT: f32 = 14.4;
+
+fn build_qr_code_command(
+    element: &QrCodeElement,
+    bounds: Rect,
+    data: &DataRow,
+) -> Result<QrCodeCommand, ElementLayoutError> {
+    validate_flow_rect(bounds, "QR code bounds")?;
+    if (bounds.width - bounds.height).abs() > 0.01 {
+        return Err(ElementLayoutError::InvalidLayout(
+            "QR code bounds must be square".to_owned(),
+        ));
+    }
+    if element.quiet_zone < 4 {
+        return Err(ElementLayoutError::InvalidLayout(
+            "QR code quiet zone must be at least 4 modules".to_owned(),
+        ));
+    }
+    let value = resolve_string(&element.value, data)?;
+    if value.is_empty() {
+        return Err(ElementLayoutError::InvalidLayout(
+            "QR code value cannot be empty".to_owned(),
+        ));
+    }
+    let error_correction = match element.error_correction {
+        QrErrorCorrection::Low => QrCodeEcc::Low,
+        QrErrorCorrection::Medium => QrCodeEcc::Medium,
+        QrErrorCorrection::Quartile => QrCodeEcc::Quartile,
+        QrErrorCorrection::High => QrCodeEcc::High,
+    };
+    let qr = QrCode::encode_text(&value, error_correction).map_err(|error| {
+        ElementLayoutError::InvalidLayout(format!("QR code data cannot be encoded: {error}"))
+    })?;
+    let size = qr.size() as usize;
+    let total_modules = size + usize::from(element.quiet_zone) * 2;
+    let module_size = bounds.width / total_modules as f32;
+    if module_size + 0.001 < MIN_SCANNABLE_MODULE_PT {
+        return Err(ElementLayoutError::InvalidLayout(format!(
+            "QR code module size is {module_size:.2}pt; increase its bounds to provide at least {MIN_SCANNABLE_MODULE_PT:.2}pt per module"
+        )));
+    }
+    let mut modules = Vec::with_capacity(size * size);
+    for y in 0..size {
+        for x in 0..size {
+            modules.push(qr.get_module(x as i32, y as i32));
+        }
+    }
+
+    Ok(QrCodeCommand {
+        bounds,
+        size,
+        modules,
+        quiet_zone: element.quiet_zone,
+        color: resolve_color(&element.color)?,
+        background: resolve_color(&element.background)?,
+    })
+}
+
+fn build_barcode_command(
+    element: &BarcodeElement,
+    bounds: Rect,
+    data: &DataRow,
+) -> Result<BarcodeCommand, ElementLayoutError> {
+    validate_flow_rect(bounds, "barcode bounds")?;
+    if element.quiet_zone < 10 {
+        return Err(ElementLayoutError::InvalidLayout(
+            "Code 128 quiet zone must be at least 10 modules".to_owned(),
+        ));
+    }
+    if bounds.height + 0.01 < MIN_BARCODE_HEIGHT_PT {
+        return Err(ElementLayoutError::InvalidLayout(format!(
+            "Code 128 bar height is {:.2}pt; increase it to at least {MIN_BARCODE_HEIGHT_PT:.2}pt",
+            bounds.height
+        )));
+    }
+    let value = resolve_string(&element.value, data)?;
+    if value.is_empty() {
+        return Err(ElementLayoutError::InvalidLayout(
+            "Code 128 value cannot be empty".to_owned(),
+        ));
+    }
+    let modules = match element.format {
+        BarcodeFormat::Code128 => Code128::new(format!("Ɓ{value}"))
+            .map_err(|error| {
+                ElementLayoutError::InvalidLayout(format!(
+                    "Code 128 value cannot be encoded: {error}"
+                ))
+            })?
+            .encode()
+            .into_iter()
+            .map(|module| module == 1)
+            .collect::<Vec<_>>(),
+    };
+    let total_modules = modules.len() + usize::from(element.quiet_zone) * 2;
+    let module_size = bounds.width / total_modules as f32;
+    if module_size + 0.001 < MIN_SCANNABLE_MODULE_PT {
+        return Err(ElementLayoutError::InvalidLayout(format!(
+            "Code 128 module size is {module_size:.2}pt; increase its width to provide at least {MIN_SCANNABLE_MODULE_PT:.2}pt per module"
+        )));
+    }
+
+    Ok(BarcodeCommand {
+        bounds,
+        modules,
+        quiet_zone: element.quiet_zone,
+        color: resolve_color(&element.color)?,
+        background: resolve_color(&element.background)?,
+    })
 }
 
 #[derive(Debug)]
@@ -2690,6 +2850,97 @@ mod tests {
                 .to_string()
                 .contains("overflow is set to error")
         );
+    }
+
+    #[test]
+    fn encodes_vector_qr_and_code128_commands_with_preflight() {
+        let template: Template = serde_json::from_str(
+            r##"{
+              "name": "Specialty codes",
+              "document": {
+                "width": { "value": 240, "unit": "points" },
+                "height": { "value": 200, "unit": "points" }
+              },
+              "pages": [{ "elements": [
+                {
+                  "type": "qr_code",
+                  "position": {
+                    "x": { "value": 10, "unit": "points" },
+                    "y": { "value": 100, "unit": "points" },
+                    "width": { "value": 80, "unit": "points" },
+                    "height": { "value": 80, "unit": "points" }
+                  },
+                  "value": "{{url}}",
+                  "error_correction": "high",
+                  "quiet_zone": 6
+                },
+                {
+                  "type": "barcode",
+                  "position": {
+                    "x": { "value": 10, "unit": "points" },
+                    "y": { "value": 30, "unit": "points" },
+                    "width": { "value": 220, "unit": "points" },
+                    "height": { "value": 40, "unit": "points" }
+                  },
+                  "value": "{{sku}}"
+                },
+                {
+                  "type": "svg",
+                  "position": {
+                    "x": { "value": 110, "unit": "points" },
+                    "y": { "value": 100, "unit": "points" },
+                    "width": { "value": 80, "unit": "points" },
+                    "height": { "value": 80, "unit": "points" }
+                  },
+                  "source": "{{icon}}"
+                }
+              ] }]
+            }"##,
+        )
+        .unwrap();
+        let data: DataRow = serde_json::from_value(json!({
+            "url": "https://example.com/forge",
+            "sku": "PF-100",
+            "icon": "assets/icon.svg"
+        }))
+        .unwrap();
+        let document = BasicLayoutEngine
+            .layout_with_options(
+                &template,
+                &data,
+                &LayoutOptions {
+                    asset_base: PathBuf::from("examples"),
+                },
+            )
+            .unwrap();
+
+        let DrawCommand::QrCode(qr_code) = &document.pages[0].commands[0].command else {
+            panic!("expected QR code");
+        };
+        assert!(qr_code.size >= 21);
+        assert_eq!(qr_code.modules.len(), qr_code.size * qr_code.size);
+        assert_eq!(qr_code.quiet_zone, 6);
+
+        let DrawCommand::Barcode(barcode) = &document.pages[0].commands[1].command else {
+            panic!("expected barcode");
+        };
+        assert!(barcode.modules.len() > 80);
+        assert!(barcode.modules.iter().any(|module| *module));
+        assert_eq!(barcode.quiet_zone, 10);
+
+        let DrawCommand::Svg(svg) = &document.pages[0].commands[2].command else {
+            panic!("expected SVG");
+        };
+        assert_eq!(svg.source, PathBuf::from("examples/assets/icon.svg"));
+
+        let mut too_small = template;
+        let Element::QrCode(qr_code) = &mut too_small.pages[0].elements[0] else {
+            unreachable!();
+        };
+        qr_code.position.as_mut().unwrap().width.value = 10.0;
+        qr_code.position.as_mut().unwrap().height.value = 10.0;
+        let error = BasicLayoutEngine.layout(&too_small, &data).unwrap_err();
+        assert!(error.to_string().contains("module size"));
     }
 
     #[test]

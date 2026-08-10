@@ -1,0 +1,127 @@
+{
+  "schema_version": 1,
+  "name": "High-value specialty elements",
+  "document": {
+    "width": { "value": 432, "unit": "points" },
+    "height": { "value": 360, "unit": "points" },
+    "metadata": {
+      "title": "Print Forge specialty-element fixture",
+      "author": "Print Forge"
+    }
+  },
+  "fields": [
+    { "name": "product_url", "field_type": "text", "required": true },
+    { "name": "sku", "field_type": "text", "required": true }
+  ],
+  "fonts": [
+    {
+      "name": "Helvetica",
+      "regular": "assets/fonts/Helvetica.ttf",
+      "bold": "assets/fonts/Helvetica-Bold.ttf"
+    }
+  ],
+  "pages": [
+    {
+      "elements": [
+        {
+          "type": "text",
+          "position": {
+            "x": { "value": 36, "unit": "points" },
+            "y": { "value": 322, "unit": "points" },
+            "width": { "value": 360, "unit": "points" },
+            "height": { "value": 18, "unit": "points" }
+          },
+          "value": "PRINT FORGE / SPECIALTY ELEMENTS",
+          "font": "Helvetica",
+          "font_style": "bold",
+          "font_size": { "value": 13, "unit": "points" },
+          "color": "#16324F"
+        },
+        {
+          "type": "svg",
+          "position": {
+            "x": { "value": 36, "unit": "points" },
+            "y": { "value": 170, "unit": "points" },
+            "width": { "value": 120, "unit": "points" },
+            "height": { "value": 120, "unit": "points" }
+          },
+          "source": "assets/vectors/forge-mark.svg",
+          "fit": "contain"
+        },
+        {
+          "type": "text",
+          "position": {
+            "x": { "value": 36, "unit": "points" },
+            "y": { "value": 146, "unit": "points" },
+            "width": { "value": 120, "unit": "points" },
+            "height": { "value": 12, "unit": "points" }
+          },
+          "value": "VECTOR SVG",
+          "font": "Helvetica",
+          "font_style": "bold",
+          "font_size": { "value": 8, "unit": "points" },
+          "align": "center",
+          "color": "#486581"
+        },
+        {
+          "type": "qr_code",
+          "position": {
+            "x": { "value": 270, "unit": "points" },
+            "y": { "value": 170, "unit": "points" },
+            "width": { "value": 108, "unit": "points" },
+            "height": { "value": 108, "unit": "points" }
+          },
+          "value": "{{product_url}}",
+          "error_correction": "high",
+          "quiet_zone": 4,
+          "color": "#16324F",
+          "background": "#FFFFFF"
+        },
+        {
+          "type": "text",
+          "position": {
+            "x": { "value": 258, "unit": "points" },
+            "y": { "value": 146, "unit": "points" },
+            "width": { "value": 132, "unit": "points" },
+            "height": { "value": 12, "unit": "points" }
+          },
+          "value": "QR / HIGH ECC / 4X QUIET ZONE",
+          "font": "Helvetica",
+          "font_style": "bold",
+          "font_size": { "value": 7, "unit": "points" },
+          "align": "center",
+          "color": "#486581"
+        },
+        {
+          "type": "barcode",
+          "position": {
+            "x": { "value": 36, "unit": "points" },
+            "y": { "value": 63, "unit": "points" },
+            "width": { "value": 360, "unit": "points" },
+            "height": { "value": 50, "unit": "points" }
+          },
+          "value": "{{sku}}",
+          "format": "code128",
+          "quiet_zone": 10,
+          "color": "#102A43",
+          "background": "#FFFFFF"
+        },
+        {
+          "type": "text",
+          "position": {
+            "x": { "value": 36, "unit": "points" },
+            "y": { "value": 39, "unit": "points" },
+            "width": { "value": 360, "unit": "points" },
+            "height": { "value": 12, "unit": "points" }
+          },
+          "value": "CODE 128 / {{sku}} / 10X QUIET ZONES",
+          "font": "Helvetica",
+          "font_style": "bold",
+          "font_size": { "value": 8, "unit": "points" },
+          "align": "center",
+          "color": "#486581"
+        }
+      ]
+    }
+  ]
+}

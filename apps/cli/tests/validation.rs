@@ -158,8 +158,8 @@ fn missing_variables_report_row_page_and_element() {
 }
 
 #[test]
-fn unsupported_elements_report_row_page_and_element() {
-    let directory = TestDir::new("unsupported-element");
+fn specialty_preflight_errors_report_row_page_and_element() {
+    let directory = TestDir::new("specialty-preflight");
     let template = directory.write(
         "template.json",
         &valid_document(
@@ -168,8 +168,8 @@ fn unsupported_elements_report_row_page_and_element() {
               "position": {
                 "x": { "value": 10, "unit": "points" },
                 "y": { "value": 10, "unit": "points" },
-                "width": { "value": 40, "unit": "points" },
-                "height": { "value": 40, "unit": "points" }
+                "width": { "value": 10, "unit": "points" },
+                "height": { "value": 10, "unit": "points" }
               },
               "value": "https://example.com"
             }"##,
@@ -188,6 +188,6 @@ fn unsupported_elements_report_row_page_and_element() {
     assert!(!output.status.success());
     assert!(errors.contains("dataset row 0"));
     assert!(errors.contains("page 0, element pages[0].elements[0]"));
-    assert!(errors.contains("not supported by this layout engine: qr_code"));
+    assert!(errors.contains("QR code module size"));
     assert!(!pdf.exists());
 }

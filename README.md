@@ -94,6 +94,11 @@ cargo run -- render examples/flow-layout.json examples/flow-layout-data.json \
 cargo run -- render examples/table-invoice.json examples/table-invoice-data.json \
   output/pdf/table-invoice.pdf
 
+# Render vector SVG, QR, and Code 128 specialty elements.
+cargo run -- render examples/specialty-elements.json \
+  examples/specialty-elements-data.json \
+  output/pdf/specialty-elements.pdf
+
 # Render reusable groups as a repeated label grid.
 cargo run -- render examples/label-sheet.json examples/label-sheet-data.json \
   output/pdf/label-sheet.pdf
@@ -163,6 +168,25 @@ The MVP deliberately accepts scalar cell values only. Table rows must be
 objects; merged cells, nested tables, arbitrary cell children, and custom cell
 layouts are rejected rather than silently simplified.
 
+### Specialty elements
+
+A positioned `svg` reads a local SVG asset relative to the template file and
+embeds it as vector PDF content. Its `fit` option uses the same `contain`,
+`cover`, and `stretch` behavior as raster images; `contain` is the default.
+
+A `qr_code` resolves its `value` from job data and supports `low`, `medium`,
+`quartile`, and `high` error correction. Its quiet zone defaults to the
+required four modules and may be increased. QR bounds must be square. A
+`barcode` currently supports `format: "code128"`; its quiet zones default to
+ten narrow modules on both sides. Both elements accept strict `color` and
+`background` print colors and remain vector shapes in the PDF.
+
+Scan preflight rejects QR and Code 128 modules narrower than 0.5pt, QR quiet
+zones below four modules, Code 128 quiet zones below ten modules, non-square QR
+bounds, and Code 128 bars shorter than 14.4pt. Payload-dependent module width
+is checked after template variables resolve, so long values cannot silently
+produce an unreadably dense symbol.
+
 ### Reusable composition and repetition
 
 A positioned `group` is a reusable local coordinate system. Child coordinates
@@ -188,9 +212,9 @@ contain tables, page breaks, or nested repeaters.
 
 The current renderer supports measured and wrapped text, embedded font
 families, local PNG/JPEG images, rectangles, lines, stacks, tables, and
-pagination, translated groups, and vertical, horizontal, and grid repeaters.
-Asset paths are resolved relative to the template file. SVG and QR codes remain
-explicit implementation errors.
+pagination, translated groups, vertical/horizontal/grid repeaters, vector SVG,
+QR codes, and Code 128 barcodes. Asset paths are resolved relative to the
+template file.
 
 ## Development
 
@@ -291,10 +315,10 @@ each priority before moving to the next unless an item is clearly independent.
 
 ### 8. Add high-value specialty elements
 
-- [ ] Render SVG assets while preserving vector output.
-- [ ] Generate QR codes with configurable error correction and quiet zones.
-- [ ] Add Code 128 barcode support for labels, tickets, and inventory use cases.
-- [ ] Preflight barcode and QR dimensions for reliable scanning.
+- [x] Render SVG assets while preserving vector output.
+- [x] Generate QR codes with configurable error correction and quiet zones.
+- [x] Add Code 128 barcode support for labels, tickets, and inventory use cases.
+- [x] Preflight barcode and QR dimensions for reliable scanning.
 
 ### 9. Harden the CLI and library API
 

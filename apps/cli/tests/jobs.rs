@@ -266,6 +266,33 @@ fn mvp_table_fixture_wraps_rows_and_paginates() {
 }
 
 #[test]
+fn specialty_fixture_renders_vector_svg_qr_and_code128() {
+    let directory = TestDir::new("specialty-job");
+    let examples = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples");
+    let template = examples.join("specialty-elements.json");
+    let dataset = examples.join("specialty-elements-data.json");
+    let pdf = directory.path().join("specialty-elements.pdf");
+    let output = run(&[
+        "render",
+        template.to_str().unwrap(),
+        dataset.to_str().unwrap(),
+        pdf.to_str().unwrap(),
+        "--print-ready",
+    ]);
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(page_count(&pdf), 1);
+    assert!(String::from_utf8_lossy(&output.stdout).contains("1 page(s)"));
+    let parsed = lopdf::Document::load(&pdf).unwrap();
+    assert_eq!(parsed.version, "1.6");
+    assert!(parsed.catalog().unwrap().has(b"OutputIntents"));
+}
+
+#[test]
 fn composition_fixtures_render_repeated_labels_and_catalog_pages() {
     let directory = TestDir::new("composition-job");
     let examples = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples");
