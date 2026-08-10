@@ -5,6 +5,8 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use serde_json::Value;
+
 struct TestDir(PathBuf);
 
 impl TestDir {
@@ -68,6 +70,68 @@ fn malformed_templates_fail_before_validation() {
 
     assert!(!output.status.success());
     assert!(stderr(&output).contains("failed to parse template"));
+}
+
+#[test]
+fn json_output_is_machine_readable_and_input_failures_use_exit_code_three() {
+    let directory = TestDir::new("json-output");
+    let dataset = directory.write("dataset.JSON", r#"[{"name":"Ada"}]"#);
+    let valid = run(&["--json", "inspect-data", dataset.to_str().unwrap()]);
+    let payload: Value = serde_json::from_slice(&valid.stdout).unwrap();
+
+    assert!(valid.status.success());
+    assert_eq!(payload["status"], "valid");
+    assert_eq!(payload["rows"], 1);
+    assert!(valid.stderr.is_empty());
+
+    let malformed = directory.write("template.json", "{");
+    let failed = run(&["--json", "validate", malformed.to_str().unwrap()]);
+    let payload: Value = serde_json::from_slice(&failed.stdout).unwrap();
+    assert_eq!(failed.status.code(), Some(3));
+    assert_eq!(payload["status"], "error");
+    assert_eq!(payload["exit_code"], 3);
+}
+
+#[test]
+fn warning_policies_can_deny_or_hide_warnings() {
+    let directory = TestDir::new("warning-policy");
+    let template = directory.write(
+        "template.json",
+        &valid_document(
+            r##"{
+              "type": "rectangle",
+              "position": {
+                "x": { "value": 90, "unit": "points" },
+                "y": { "value": 90, "unit": "points" },
+                "width": { "value": 20, "unit": "points" },
+                "height": { "value": 20, "unit": "points" }
+              },
+              "fill": "#000000"
+            }"##,
+        ),
+    );
+
+    let denied = run(&["--warnings", "deny", "validate", template.to_str().unwrap()]);
+    assert_eq!(denied.status.code(), Some(3));
+    assert!(stderr(&denied).contains("--warnings deny"));
+
+    let ignored = run(&[
+        "--warnings",
+        "ignore",
+        "validate",
+        template.to_str().unwrap(),
+    ]);
+    assert!(ignored.status.success());
+    assert!(!stderr(&ignored).contains("warning["));
+}
+
+#[test]
+fn verbose_failures_include_the_structured_exit_code() {
+    let directory = TestDir::new("verbose-exit");
+    let output = run(&["-v", "inspect-data", directory.path().to_str().unwrap()]);
+
+    assert_eq!(output.status.code(), Some(3));
+    assert!(stderr(&output).contains("exit code: 3"));
 }
 
 #[test]

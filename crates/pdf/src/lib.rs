@@ -22,9 +22,25 @@ use printpdf::{
     PdfSaveOptions, Point, Pt, RawImage, Rect, Rgb, Svg, TextItem, WindingOrder, XObject,
     XObjectId, XObjectTransform, XmpMetadata,
 };
+use thiserror::Error;
 
+/// A stable, phase-specific PDF operation failure.
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum PdfError {
+    #[error("PDF preflight failed: {0:#}")]
+    Preflight(#[source] anyhow::Error),
+    #[error("PDF rendering failed: {0:#}")]
+    Render(#[source] anyhow::Error),
+    #[error("PDF conformance validation failed: {0:#}")]
+    Conformance(#[source] anyhow::Error),
+}
+
+pub type PdfResult<T> = std::result::Result<T, PdfError>;
+
+/// Renderer boundary for applications that provide an alternative PDF backend.
 pub trait DocumentRenderer {
-    fn render(&self, document: &ResolvedDocument) -> Result<Vec<u8>>;
+    fn render(&self, document: &ResolvedDocument) -> PdfResult<Vec<u8>>;
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -65,7 +81,7 @@ impl PdfRenderOptions {
 pub struct PdfRenderer;
 
 impl DocumentRenderer for PdfRenderer {
-    fn render(&self, document: &ResolvedDocument) -> Result<Vec<u8>> {
+    fn render(&self, document: &ResolvedDocument) -> PdfResult<Vec<u8>> {
         self.render_with_options(document, &PdfRenderOptions::default())
     }
 }
@@ -75,9 +91,17 @@ impl PdfRenderer {
         &self,
         document: &ResolvedDocument,
         options: &PdfRenderOptions,
-    ) -> Result<Vec<u8>> {
+    ) -> PdfResult<Vec<u8>> {
         preflight_document(document, options)?;
+        self.render_inner(document, options)
+            .map_err(PdfError::Render)
+    }
 
+    fn render_inner(
+        &self,
+        document: &ResolvedDocument,
+        options: &PdfRenderOptions,
+    ) -> Result<Vec<u8>> {
         let bleed = document.bleed_pt;
         let media_width_pt = document.width_pt + bleed * 2.0;
         let media_height_pt = document.height_pt + bleed * 2.0;
@@ -135,7 +159,7 @@ impl PdfRenderer {
             .save_to(&mut bytes)
             .context("failed to serialize deterministic PDF")?;
         if let Some(standard) = options.pdf_x {
-            validate_pdf_x(&bytes, standard)?;
+            validate_pdf_x_inner(&bytes, standard)?;
         }
         Ok(bytes)
     }
@@ -185,7 +209,14 @@ fn fnv1a(bytes: &[u8], offset: u64) -> u64 {
     })
 }
 
-pub fn preflight_document(document: &ResolvedDocument, options: &PdfRenderOptions) -> Result<()> {
+pub fn preflight_document(
+    document: &ResolvedDocument,
+    options: &PdfRenderOptions,
+) -> PdfResult<()> {
+    preflight_document_inner(document, options).map_err(PdfError::Preflight)
+}
+
+fn preflight_document_inner(document: &ResolvedDocument, options: &PdfRenderOptions) -> Result<()> {
     ensure!(
         document.bleed_pt.is_finite() && document.bleed_pt >= 0.0,
         "document bleed must be nonnegative and finite"
@@ -335,7 +366,11 @@ fn replace_xmp_instance_id(content: &str, identifier: &str) -> Result<String> {
     Ok(output)
 }
 
-pub fn validate_pdf_x(bytes: &[u8], standard: PdfXStandard) -> Result<()> {
+pub fn validate_pdf_x(bytes: &[u8], standard: PdfXStandard) -> PdfResult<()> {
+    validate_pdf_x_inner(bytes, standard).map_err(PdfError::Conformance)
+}
+
+fn validate_pdf_x_inner(bytes: &[u8], standard: PdfXStandard) -> Result<()> {
     let document = LoDocument::load_mem(bytes).context("generated PDF cannot be parsed")?;
     match standard {
         PdfXStandard::X4 => ensure!(

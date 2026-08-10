@@ -1,6 +1,8 @@
 use std::{
     collections::HashSet,
     fs,
+    ops::ControlFlow,
+    ops::Range,
     path::{Path, PathBuf},
     str::FromStr,
     time::Instant,
@@ -8,7 +10,7 @@ use std::{
 
 use anyhow::{Context, Result, anyhow, bail};
 use clap::{Args, ValueEnum};
-use print_forge_dataset::DataRow;
+use print_forge_dataset::{DataRow, Dataset, visit_path};
 use print_forge_engine::{BasicLayoutEngine, LayoutOptions, ResolvedDocument};
 use print_forge_pdf::{PdfRenderOptions, PdfRenderer, PdfXStandard};
 use print_forge_template::Template;
@@ -16,7 +18,7 @@ use print_forge_validation::{validate_data_row, validate_dataset, validate_templ
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::{load_dataset, load_template, print_diagnostics, require_valid};
+use crate::{OutputOptions, load_template, print_diagnostics, require_acceptable, write_json};
 
 #[derive(Debug, Args)]
 pub(crate) struct RenderArgs {
@@ -54,6 +56,9 @@ pub(crate) struct RenderArgs {
     /// Generate and validate against a PDF/X conformance target.
     #[arg(long, value_enum, value_name = "TARGET")]
     pub(crate) pdf_x: Option<PdfXTarget>,
+    /// Validate, lay out, and preflight every selected row without writing files.
+    #[arg(long)]
+    pub(crate) dry_run: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -126,10 +131,11 @@ struct JobSummary {
     outputs: Vec<String>,
     records: Vec<RecordSummary>,
     elapsed_ms: u128,
+    dry_run: bool,
 }
 
 impl JobSummary {
-    fn new(output_mode: OutputMode, selected_rows: usize, warnings: usize) -> Self {
+    fn new(output_mode: OutputMode, selected_rows: usize, warnings: usize, dry_run: bool) -> Self {
         Self {
             status: JobStatus::Succeeded,
             output_mode: output_mode.as_str(),
@@ -140,6 +146,7 @@ impl JobSummary {
             outputs: Vec::new(),
             records: Vec::new(),
             elapsed_ms: 0,
+            dry_run,
         }
     }
 
@@ -217,22 +224,23 @@ struct PreparedRow {
     document: ResolvedDocument,
 }
 
-pub(crate) fn render(arguments: &RenderArgs) -> Result<()> {
+pub(crate) fn render(arguments: &RenderArgs, output_options: OutputOptions) -> Result<()> {
     let started = Instant::now();
     let template = load_template(&arguments.template)?;
-    let dataset = load_dataset(&arguments.dataset)?;
 
     let template_report = validate_template(&template);
-    print_diagnostics(&template_report);
-    require_valid(&template_report)?;
+    print_diagnostics(&template_report, output_options);
+    require_acceptable(&template_report, output_options.warnings)?;
 
-    if dataset.rows.is_empty() {
+    let row_count = visit_path(&arguments.dataset, |_, _| ControlFlow::Continue(()))?.rows();
+    if row_count == 0 {
+        let dataset = Dataset::default();
         let report = validate_dataset(&template, &dataset);
-        print_diagnostics(&report);
-        require_valid(&report)?;
+        print_diagnostics(&report, output_options);
+        require_acceptable(&report, output_options.warnings)?;
     }
 
-    let row_indices = select_rows(dataset.rows.len(), arguments.rows, arguments.limit)?;
+    let row_indices = select_rows(row_count, arguments.rows, arguments.limit)?;
     if arguments.output_mode == OutputMode::Separate {
         validate_name_pattern(&arguments.output_name)?;
     }
@@ -241,12 +249,15 @@ pub(crate) fn render(arguments: &RenderArgs) -> Result<()> {
     }
     let pdf_options = render_options(arguments)?;
 
-    prepare_output(arguments.output_mode, &arguments.output)?;
+    if !arguments.dry_run {
+        prepare_output(arguments.output_mode, &arguments.output)?;
+    }
 
     let mut summary = JobSummary::new(
         arguments.output_mode,
         row_indices.len(),
         template_report.warning_count(),
+        arguments.dry_run,
     );
     let asset_base = arguments
         .template
@@ -257,35 +268,53 @@ pub(crate) fn render(arguments: &RenderArgs) -> Result<()> {
     let mut reserved_names = HashSet::new();
     let mut stopped = false;
 
-    for row_index in row_indices {
-        let row = &dataset.rows[row_index];
-        let row_report = validate_data_row(&template, row, row_index);
-        print_diagnostics(&row_report);
+    if output_options.verbose > 0 && !output_options.json {
+        eprintln!(
+            "processing {} selected row(s) from {}{}",
+            row_indices.len(),
+            arguments.dataset.display(),
+            if arguments.dry_run { " (dry run)" } else { "" }
+        );
+    }
+
+    visit_path(&arguments.dataset, |row_index, row| {
+        if row_index < row_indices.start {
+            return ControlFlow::Continue(());
+        }
+        if row_index >= row_indices.end {
+            return ControlFlow::Break(());
+        }
+        if output_options.verbose > 1 && !output_options.json {
+            eprintln!("processing dataset row {row_index}");
+        }
+        let row_report = validate_data_row(&template, &row, row_index);
+        print_diagnostics(&row_report, output_options);
         let warnings = row_report.warning_count();
 
-        if !row_report.is_valid() {
+        if require_acceptable(&row_report, output_options.warnings).is_err() {
             let error = anyhow!(
-                "validation failed for dataset row {row_index} with {} error(s)",
-                row_report.error_count()
+                "validation failed for dataset row {row_index} with {} error(s) and {} warning(s)",
+                row_report.error_count(),
+                row_report.warning_count()
             );
-            report_row_failure(&mut summary, row_index, warnings, &error);
+            report_row_failure(&mut summary, row_index, warnings, &error, output_options);
             if !arguments.continue_on_error {
                 stopped = true;
-                break;
+                return ControlFlow::Break(());
             }
-            continue;
+            return ControlFlow::Continue(());
         }
 
-        let rendered = render_row(&template, row, row_index, &asset_base, &pdf_options);
+        let rendered = render_row(&template, &row, row_index, &asset_base, &pdf_options);
         let (document, pdf) = match rendered {
             Ok(rendered) => rendered,
             Err(error) => {
-                report_row_failure(&mut summary, row_index, warnings, &error);
+                report_row_failure(&mut summary, row_index, warnings, &error, output_options);
                 if !arguments.continue_on_error {
                     stopped = true;
-                    break;
+                    return ControlFlow::Break(());
                 }
-                continue;
+                return ControlFlow::Continue(());
             }
         };
 
@@ -299,36 +328,53 @@ pub(crate) fn render(arguments: &RenderArgs) -> Result<()> {
                 let output = resolve_separate_output(
                     &arguments.output,
                     &arguments.output_name,
-                    row,
+                    &row,
                     row_index,
                     &mut reserved_names,
                 )
                 .and_then(|output| {
-                    write_pdf(&output, &pdf)?;
+                    if !arguments.dry_run {
+                        write_pdf(&output, &pdf)?;
+                    }
                     Ok(output)
                 });
 
                 match output {
                     Ok(output) => {
-                        println!(
-                            "rendered dataset row {row_index} to {} ({} page(s), {} bytes)",
-                            output.display(),
-                            document.pages.len(),
-                            pdf.len()
-                        );
+                        if !output_options.json {
+                            println!(
+                                "{} dataset row {row_index} to {} ({} page(s), {} bytes)",
+                                if arguments.dry_run {
+                                    "checked"
+                                } else {
+                                    "rendered"
+                                },
+                                output.display(),
+                                document.pages.len(),
+                                pdf.len()
+                            );
+                        }
                         summary.success(row_index, warnings, &output);
                     }
                     Err(error) => {
-                        report_row_failure(&mut summary, row_index, warnings, &error);
+                        report_row_failure(
+                            &mut summary,
+                            row_index,
+                            warnings,
+                            &error,
+                            output_options,
+                        );
                         if !arguments.continue_on_error {
                             stopped = true;
-                            break;
+                            return ControlFlow::Break(());
                         }
                     }
                 }
             }
         }
-    }
+        ControlFlow::Continue(())
+    })
+    .map_err(|error| anyhow!(error))?;
 
     if arguments.output_mode == OutputMode::Combined && !stopped && !prepared.is_empty() {
         if let Err(error) = write_combined_output(
@@ -337,8 +383,12 @@ pub(crate) fn render(arguments: &RenderArgs) -> Result<()> {
             &arguments.output,
             &pdf_options,
             &mut summary,
+            arguments.dry_run,
+            output_options,
         ) {
-            eprintln!("combined output failed: {error:#}");
+            if !output_options.json {
+                eprintln!("combined output failed: {error:#}");
+            }
             for row in &prepared {
                 summary.failure(row.row_index, row.warnings, &error);
             }
@@ -346,14 +396,11 @@ pub(crate) fn render(arguments: &RenderArgs) -> Result<()> {
     }
 
     summary.finish(started.elapsed().as_millis());
-    if let Some(path) = &arguments.summary {
+    if !arguments.dry_run
+        && let Some(path) = &arguments.summary
+    {
         write_summary(path, &summary)?;
     }
-
-    println!(
-        "job summary: {} success(es), {} warning(s), {} failure(s), {} ms",
-        summary.successes, summary.warnings, summary.failures, summary.elapsed_ms
-    );
 
     if summary.failures > 0 {
         bail!(
@@ -363,6 +410,19 @@ pub(crate) fn render(arguments: &RenderArgs) -> Result<()> {
     }
     if stopped {
         bail!("rendering stopped before producing output");
+    }
+
+    if output_options.json {
+        write_json(&summary)?;
+    } else {
+        println!(
+            "{} summary: {} success(es), {} warning(s), {} failure(s), {} ms",
+            if arguments.dry_run { "dry-run" } else { "job" },
+            summary.successes,
+            summary.warnings,
+            summary.failures,
+            summary.elapsed_ms
+        );
     }
 
     Ok(())
@@ -391,7 +451,7 @@ fn select_rows(
     row_count: usize,
     range: Option<RowRange>,
     limit: Option<usize>,
-) -> Result<Vec<usize>> {
+) -> Result<Range<usize>> {
     if row_count == 0 {
         bail!("cannot select rows from an empty dataset");
     }
@@ -411,11 +471,9 @@ fn select_rows(
         );
     }
 
-    let rows = (range.start - 1)..range.end;
-    Ok(match limit {
-        Some(limit) => rows.take(limit).collect(),
-        None => rows.collect(),
-    })
+    let start = range.start - 1;
+    let end = limit.map_or(range.end, |limit| range.end.min(start + limit));
+    Ok(start..end)
 }
 
 fn prepare_output(mode: OutputMode, output: &Path) -> Result<()> {
@@ -461,6 +519,8 @@ fn write_combined_output(
     output: &Path,
     pdf_options: &PdfRenderOptions,
     summary: &mut JobSummary,
+    dry_run: bool,
+    output_options: OutputOptions,
 ) -> Result<()> {
     let width_pt = prepared[0].document.width_pt;
     let height_pt = prepared[0].document.height_pt;
@@ -479,15 +539,20 @@ fn write_combined_output(
     let pdf = PdfRenderer
         .render_with_options(&document, pdf_options)
         .context("failed to render combined PDF")?;
-    write_pdf(output, &pdf)?;
+    if !dry_run {
+        write_pdf(output, &pdf)?;
+    }
 
-    println!(
-        "rendered {} dataset row(s) to {} ({} page(s), {} bytes)",
-        prepared.len(),
-        output.display(),
-        document.pages.len(),
-        pdf.len()
-    );
+    if !output_options.json {
+        println!(
+            "{} {} dataset row(s) to {} ({} page(s), {} bytes)",
+            if dry_run { "checked" } else { "rendered" },
+            prepared.len(),
+            output.display(),
+            document.pages.len(),
+            pdf.len()
+        );
+    }
     for row in prepared {
         summary.success(row.row_index, row.warnings, output);
     }
@@ -619,8 +684,11 @@ fn report_row_failure(
     row_index: usize,
     warnings: usize,
     error: &anyhow::Error,
+    output_options: OutputOptions,
 ) {
-    eprintln!("dataset row {row_index} failed: {error:#}");
+    if !output_options.json {
+        eprintln!("dataset row {row_index} failed: {error:#}");
+    }
     summary.failure(row_index, warnings, error);
 }
 
@@ -658,7 +726,7 @@ mod tests {
     fn parses_and_selects_one_based_inclusive_ranges_before_limiting() {
         let range = "2-5".parse::<RowRange>().unwrap();
 
-        assert_eq!(select_rows(8, Some(range), Some(2)).unwrap(), vec![1, 2]);
+        assert_eq!(select_rows(8, Some(range), Some(2)).unwrap(), 1..3);
     }
 
     #[test]

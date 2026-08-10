@@ -1119,9 +1119,10 @@ dependencies = [
 name = "print-forge-dataset"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "csv",
+ "serde",
  "serde_json",
+ "thiserror",
 ]
 
 [[package]]
@@ -1147,6 +1148,7 @@ dependencies = [
  "print-forge-template",
  "printpdf",
  "serde_json",
+ "thiserror",
 ]
 
 [[package]]
@@ -1163,6 +1165,7 @@ version = "0.1.0"
 dependencies = [
  "print-forge-dataset",
  "print-forge-template",
+ "serde",
  "serde_json",
 ]
 

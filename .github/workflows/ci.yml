@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  verify:
+    name: Format, lint, test, and render
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.88"
+          components: rustfmt, clippy
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+      - run: cargo bench --workspace --no-run
+      - name: Render representative fixtures
+        run: |
+          mkdir -p target/ci
+          cargo run -- render examples/absolute-layout.json examples/absolute-layout-data.json target/ci/absolute-layout.pdf
+          cargo run -- render examples/table-invoice.json examples/table-invoice-data.json target/ci/table-invoice.pdf
+          cargo run -- render examples/specialty-elements.json examples/specialty-elements-data.json target/ci/specialty-elements.pdf
+          cargo run -- render examples/product-catalog.json examples/product-catalog-data.json target/ci/product-catalog.pdf
