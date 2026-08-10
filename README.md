@@ -37,16 +37,22 @@ definitions, live semantic validation, raw JSON editing for advanced elements,
 preview data, and direct PDF rendering through the Print Forge layout and PDF
 crates. Elements can be rotated with the canvas handle, an exact inspector
 value, or the 90-degree shortcuts. Layer controls move the selection backward,
-forward, fully behind, or fully in front. Both the design canvas and its
-read-only rendered-preview mode use resolved engine output, so preview data,
-wrapped text, flow pagination, composed elements, raster images, SVG artwork, QR
-codes, and Code 128 bars are represented on screen. Generated continuation
-pages can be navigated directly in rendered-preview mode, and bleed and trim
-boundaries are shown separately. Missing preview values remain visible as
-`{{field}}` placeholders and are reported in the canvas toolbar instead of
-preventing the preview from rendering. Screen font rasterization is still an
-approximation; the rendered PDF remains authoritative for final typography and
-print inspection.
+forward, fully behind, or fully in front. Non-printing rulers and page-specific
+guides support center lines, a quick 18pt margin set, exact point positions, and
+direct canvas dragging. Smart snapping aligns moves, resizes, and line endpoints
+to page edges and centers, guides, and neighboring layer edges and centers;
+magenta feedback lines show the active alignment, and holding Option/Alt
+temporarily bypasses snapping. `Cmd/Ctrl+;` toggles guides and
+`Cmd/Ctrl+Shift+;` toggles snapping. Both the design canvas and its read-only
+rendered-preview mode use resolved engine output, so preview data, wrapped text,
+flow pagination, composed elements, raster images, SVG artwork, QR codes, and
+Code 128 bars are represented on screen. Generated continuation pages can be
+navigated directly in rendered-preview mode, and bleed and trim boundaries are
+shown separately. Missing preview values remain visible as `{{field}}`
+placeholders and are reported in the canvas toolbar instead of preventing the
+preview from rendering. Screen font rasterization is still an approximation;
+the rendered PDF remains authoritative for final typography and print
+inspection.
 Imported tables, groups, stacks, and repeaters remain editable through the JSON
 view while their dedicated visual inspectors are developed.
 
@@ -335,10 +341,10 @@ The roadmap below contains only unfinished work. Priorities favor a dependable
 ### P0 — Ship a usable 0.1 release
 
 - [ ] Make Print Forge Studio a supported no-code authoring path: add visual
-      inspectors for every MVP element, undo/redo, snapping and alignment,
-      asset/font management, representative data-row selection, and an exact
-      PDF-rasterized typography preview; then include the desktop app in release
-      packaging.
+      inspectors for every MVP element, undo/redo, explicit alignment and
+      distribution commands, asset/font management, representative data-row
+      selection, and an exact PDF-rasterized typography preview; then include
+      the desktop app in release packaging.
 - [ ] Generate and publish a versioned JSON Schema plus a human-readable
       template reference covering every field, element, default, constraint,
       and unsupported combination, with a valid example for each element type.

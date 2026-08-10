@@ -7,8 +7,9 @@ use std::{
 };
 
 use eframe::egui::{
-    self, Align, Color32, ComboBox, CornerRadius, FontId, Frame, Id, Key, Layout, Margin, Pos2,
-    Rect, RichText, ScrollArea, Sense, Stroke, StrokeKind, TextureHandle, TextureOptions, Vec2,
+    self, Align, Align2, Color32, ComboBox, CornerRadius, FontId, Frame, Id, Key, Layout, Margin,
+    Pos2, Rect, RichText, ScrollArea, Sense, Stroke, StrokeKind, TextureHandle, TextureOptions,
+    Vec2,
 };
 use print_forge_dataset::DataRow;
 use print_forge_engine::{
@@ -25,10 +26,10 @@ use rfd::{FileDialog, MessageButtons, MessageDialog, MessageDialogResult, Messag
 use serde::{Deserialize, Serialize};
 
 use crate::model::{
-    ElementKind, LayerMove, LineEndpoint, blank_page, bounds_points, element_bounds,
-    element_bounds_mut, element_label, element_rotation, new_element, new_field, reorder_element,
-    resize_element, set_element_rotation, starter_template, translate_element,
-    translate_line_endpoint,
+    ElementKind, LayerMove, LineEndpoint, SnapResult, blank_page, bounds_points,
+    element_alignment_bounds, element_bounds, element_bounds_mut, element_label, element_rotation,
+    new_element, new_field, reorder_element, resize_element, set_element_rotation, snap_point,
+    snap_size, snap_translation, starter_template, translate_element, translate_line_endpoint,
 };
 
 const APP_STATE_KEY: &str = "print-forge-studio-state";
@@ -52,6 +53,59 @@ struct PersistedState {
     current_path: Option<PathBuf>,
     current_page: usize,
     preview_data: String,
+    #[serde(default)]
+    guides: Vec<Vec<EditorGuide>>,
+    #[serde(default = "default_true")]
+    show_guides: bool,
+    #[serde(default = "default_true")]
+    snap_enabled: bool,
+}
+
+const fn default_true() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum GuideAxis {
+    Vertical,
+    Horizontal,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+struct EditorGuide {
+    axis: GuideAxis,
+    position_pt: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ElementDragKind {
+    Translate,
+    Resize,
+    LineEndpoint(LineEndpoint),
+}
+
+#[derive(Clone)]
+struct ElementDragState {
+    page: usize,
+    index: usize,
+    kind: ElementDragKind,
+    original: Element,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+struct SnapFeedback {
+    x: Option<f32>,
+    y: Option<f32>,
+}
+
+impl From<SnapResult> for SnapFeedback {
+    fn from(result: SnapResult) -> Self {
+        Self {
+            x: result.x,
+            y: result.y,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -119,6 +173,10 @@ pub struct StudioApp {
     canvas_mode: CanvasMode,
     preview_page: usize,
     asset_cache: AssetCache,
+    guides: Vec<Vec<EditorGuide>>,
+    show_guides: bool,
+    snap_enabled: bool,
+    active_drag: Option<ElementDragState>,
 }
 
 impl StudioApp {
@@ -127,17 +185,31 @@ impl StudioApp {
         let persisted = creation
             .storage
             .and_then(|storage| eframe::get_value::<PersistedState>(storage, APP_STATE_KEY));
-        let (template, current_path, current_page, preview_data) = persisted.map_or_else(
-            || (starter_template(), None, 0, "{}".to_owned()),
-            |state| {
-                (
-                    state.template,
-                    state.current_path,
-                    state.current_page,
-                    state.preview_data,
-                )
-            },
-        );
+        let (template, current_path, current_page, preview_data, guides, show_guides, snap_enabled) =
+            persisted.map_or_else(
+                || {
+                    (
+                        starter_template(),
+                        None,
+                        0,
+                        "{}".to_owned(),
+                        vec![Vec::new()],
+                        true,
+                        true,
+                    )
+                },
+                |state| {
+                    (
+                        state.template,
+                        state.current_path,
+                        state.current_page,
+                        state.preview_data,
+                        state.guides,
+                        state.show_guides,
+                        state.snap_enabled,
+                    )
+                },
+            );
 
         Self {
             template,
@@ -158,6 +230,10 @@ impl StudioApp {
             canvas_mode: CanvasMode::Design,
             preview_page: 0,
             asset_cache: AssetCache::default(),
+            guides,
+            show_guides,
+            snap_enabled,
+            active_drag: None,
         }
     }
 
@@ -169,6 +245,8 @@ impl StudioApp {
         self.current_path = None;
         self.current_page = 0;
         self.preview_page = 0;
+        self.guides = vec![Vec::new()];
+        self.active_drag = None;
         self.asset_cache.textures.clear();
         self.selection = Selection::Document;
         self.dirty = false;
@@ -196,6 +274,8 @@ impl StudioApp {
                 self.current_path = Some(path.clone());
                 self.current_page = 0;
                 self.preview_page = 0;
+                self.guides = vec![Vec::new(); self.template.pages.len()];
+                self.active_drag = None;
                 self.asset_cache.textures.clear();
                 self.selection = Selection::Document;
                 self.dirty = false;
@@ -326,6 +406,21 @@ impl StudioApp {
             .to_owned()
     }
 
+    fn original_for_drag(&mut self, index: usize, kind: ElementDragKind) -> Element {
+        let should_reset = self.active_drag.as_ref().is_none_or(|drag| {
+            drag.page != self.current_page || drag.index != index || drag.kind != kind
+        });
+        if should_reset {
+            self.active_drag = Some(ElementDragState {
+                page: self.current_page,
+                index,
+                kind,
+                original: self.template.pages[self.current_page].elements[index].clone(),
+            });
+        }
+        self.active_drag.as_ref().unwrap().original.clone()
+    }
+
     fn confirm_discard(&self) -> bool {
         !self.dirty
             || matches!(
@@ -425,6 +520,7 @@ impl StudioApp {
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             if small_button(ui, "+").clicked() {
                                 self.template.pages.push(blank_page());
+                                self.guides.push(Vec::new());
                                 self.current_page = self.template.pages.len() - 1;
                                 self.selection = Selection::Page;
                                 self.dirty = true;
@@ -437,6 +533,7 @@ impl StudioApp {
                             .clicked()
                         {
                             self.current_page = page_index;
+                            self.active_drag = None;
                             self.selection = Selection::Page;
                         }
                     }
@@ -614,17 +711,113 @@ impl StudioApp {
         if ui.button("Duplicate page").clicked() {
             let duplicate = self.template.pages[self.current_page].clone();
             self.template.pages.insert(self.current_page + 1, duplicate);
+            let guides = self
+                .guides
+                .get(self.current_page)
+                .cloned()
+                .unwrap_or_default();
+            self.guides.insert(self.current_page + 1, guides);
             self.current_page += 1;
             self.dirty = true;
         }
         ui.add_enabled_ui(self.template.pages.len() > 1, |ui| {
             if danger_button(ui, "Delete page").clicked() {
                 self.template.pages.remove(self.current_page);
+                if self.current_page < self.guides.len() {
+                    self.guides.remove(self.current_page);
+                }
                 self.current_page = self.current_page.min(self.template.pages.len() - 1);
                 self.selection = Selection::Page;
                 self.dirty = true;
             }
         });
+        ui.add_space(16.0);
+        section_label(ui, "NON-PRINTING GUIDES");
+        let width = self.template.document.width.to_points();
+        let height = self.template.document.height.to_points();
+        ui.horizontal_wrapped(|ui| {
+            if ui.button("+ V center").clicked() {
+                push_editor_guide(
+                    &mut self.guides[self.current_page],
+                    EditorGuide {
+                        axis: GuideAxis::Vertical,
+                        position_pt: self.template.document.width.to_points() / 2.0,
+                    },
+                );
+            }
+            if ui.button("+ H center").clicked() {
+                push_editor_guide(
+                    &mut self.guides[self.current_page],
+                    EditorGuide {
+                        axis: GuideAxis::Horizontal,
+                        position_pt: self.template.document.height.to_points() / 2.0,
+                    },
+                );
+            }
+            if ui.button("+ Margins").clicked() {
+                let horizontal_margin = 18.0_f32.min(width / 2.0);
+                let vertical_margin = 18.0_f32.min(height / 2.0);
+                for guide in [
+                    EditorGuide {
+                        axis: GuideAxis::Vertical,
+                        position_pt: horizontal_margin,
+                    },
+                    EditorGuide {
+                        axis: GuideAxis::Vertical,
+                        position_pt: width - horizontal_margin,
+                    },
+                    EditorGuide {
+                        axis: GuideAxis::Horizontal,
+                        position_pt: vertical_margin,
+                    },
+                    EditorGuide {
+                        axis: GuideAxis::Horizontal,
+                        position_pt: height - vertical_margin,
+                    },
+                ] {
+                    push_editor_guide(&mut self.guides[self.current_page], guide);
+                }
+            }
+            let has_guides = !self.guides[self.current_page].is_empty();
+            if ui
+                .add_enabled(has_guides, egui::Button::new("Clear"))
+                .clicked()
+            {
+                self.guides[self.current_page].clear();
+            }
+        });
+        let mut remove_guide = None;
+        for (index, guide) in self.guides[self.current_page].iter_mut().enumerate() {
+            ui.horizontal(|ui| {
+                ui.label(match guide.axis {
+                    GuideAxis::Vertical => "V",
+                    GuideAxis::Horizontal => "H",
+                });
+                let maximum = match guide.axis {
+                    GuideAxis::Vertical => width,
+                    GuideAxis::Horizontal => height,
+                };
+                ui.add(
+                    egui::DragValue::new(&mut guide.position_pt)
+                        .range(0.0..=maximum)
+                        .speed(1.0)
+                        .suffix(" pt"),
+                );
+                if ui.small_button("×").on_hover_text("Delete guide").clicked() {
+                    remove_guide = Some(index);
+                }
+            });
+        }
+        if let Some(index) = remove_guide {
+            self.guides[self.current_page].remove(index);
+        }
+        ui.label(
+            RichText::new(
+                "Drag guides directly on the canvas. Guides are saved in Studio but never printed.",
+            )
+            .color(Color32::from_gray(145))
+            .small(),
+        );
         ui.add_space(16.0);
         ui.label(
             RichText::new("Headers, footers, flow regions, tables, groups, and repeaters can be imported and inspected on the canvas. Dedicated visual controls are planned as Studio grows.")
@@ -801,6 +994,15 @@ impl StudioApp {
                             if ui.small_button("Fit").clicked() {
                                 self.zoom = 1.0;
                             }
+                            ui.separator();
+                            ui.toggle_value(&mut self.show_guides, "Guides")
+                                .on_hover_text(
+                                    "Show rulers and non-printing layout guides (Cmd/Ctrl+;)",
+                                );
+                            ui.toggle_value(&mut self.snap_enabled, "Snap")
+                                .on_hover_text(
+                                    "Snap to page, guides, and other layers (Cmd/Ctrl+Shift+;); hold Option/Alt to bypass",
+                                );
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                 ui.checkbox(&mut self.print_ready_preview, "PDF/X export");
                                 if ui.small_button("Refresh assets").clicked() {
@@ -893,6 +1095,15 @@ impl StudioApp {
 
                 if self.canvas_mode == CanvasMode::Design {
                     let elements = self.template.pages[self.current_page].elements.clone();
+                    let visible_guides = if self.show_guides {
+                        self.guides[self.current_page].clone()
+                    } else {
+                        Vec::new()
+                    };
+                    let snapping_active = self.snap_enabled
+                        && !ctx.input(|input| input.modifiers.alt);
+                    let snap_threshold = 7.0 / scale;
+                    let mut snap_feedback = SnapFeedback::default();
                     for (index, element) in elements.iter().enumerate() {
                         let selected = self.selection == Selection::Element(index);
                         let interaction = paint_element(
@@ -911,28 +1122,139 @@ impl StudioApp {
                             self.selection = Selection::Element(index);
                         }
                         if let Some(delta) = interaction.translate {
-                            translate_element(
-                                &mut self.template.pages[self.current_page].elements[index],
-                                delta.x / scale,
-                                -delta.y / scale,
-                            );
+                            let mut updated =
+                                self.original_for_drag(index, ElementDragKind::Translate);
+                            let raw_delta = [delta.x / scale, -delta.y / scale];
+                            let snapped = if snapping_active {
+                                let (x_targets, y_targets) = alignment_targets(
+                                    &elements,
+                                    index,
+                                    page_width,
+                                    page_height,
+                                    &visible_guides,
+                                );
+                                element_alignment_bounds(&updated).map_or(
+                                    SnapResult {
+                                        delta: raw_delta,
+                                        x: None,
+                                        y: None,
+                                    },
+                                    |bounds| {
+                                        snap_translation(
+                                            bounds,
+                                            raw_delta,
+                                            &x_targets,
+                                            &y_targets,
+                                            snap_threshold,
+                                        )
+                                    },
+                                )
+                            } else {
+                                SnapResult {
+                                    delta: raw_delta,
+                                    x: None,
+                                    y: None,
+                                }
+                            };
+                            translate_element(&mut updated, snapped.delta[0], snapped.delta[1]);
+                            self.template.pages[self.current_page].elements[index] = updated;
+                            snap_feedback = snapped.into();
                             self.dirty = true;
                         }
-                        if let Some(size) = interaction.resize {
-                            resize_element(
-                                &mut self.template.pages[self.current_page].elements[index],
-                                size.x / scale,
-                                size.y / scale,
-                            );
+                        if let Some(delta) = interaction.resize {
+                            let mut updated =
+                                self.original_for_drag(index, ElementDragKind::Resize);
+                            let original_bounds = element_bounds(&updated).map(bounds_points);
+                            let raw_delta = [delta.x / scale, delta.y / scale];
+                            let snapped = if snapping_active
+                                && element_rotation(&updated).is_some_and(|angle| angle == 0.0)
+                            {
+                                let (x_targets, y_targets) = alignment_targets(
+                                    &elements,
+                                    index,
+                                    page_width,
+                                    page_height,
+                                    &visible_guides,
+                                );
+                                original_bounds.map_or(
+                                    SnapResult {
+                                        delta: raw_delta,
+                                        x: None,
+                                        y: None,
+                                    },
+                                    |bounds| {
+                                        snap_size(
+                                            bounds,
+                                            raw_delta,
+                                            &x_targets,
+                                            &y_targets,
+                                            snap_threshold,
+                                        )
+                                    },
+                                )
+                            } else {
+                                SnapResult {
+                                    delta: raw_delta,
+                                    x: None,
+                                    y: None,
+                                }
+                            };
+                            if let Some(bounds) = original_bounds {
+                                resize_element(
+                                    &mut updated,
+                                    bounds[2] + snapped.delta[0],
+                                    bounds[3] + snapped.delta[1],
+                                );
+                                self.template.pages[self.current_page].elements[index] = updated;
+                                snap_feedback = snapped.into();
+                            }
                             self.dirty = true;
                         }
                         if let Some((endpoint, delta)) = interaction.line_endpoint {
-                            translate_line_endpoint(
-                                &mut self.template.pages[self.current_page].elements[index],
-                                endpoint,
-                                delta.x / scale,
-                                -delta.y / scale,
+                            let mut updated = self.original_for_drag(
+                                index,
+                                ElementDragKind::LineEndpoint(endpoint),
                             );
+                            let raw_delta = [delta.x / scale, -delta.y / scale];
+                            let snapped = if snapping_active {
+                                let (x_targets, y_targets) = alignment_targets(
+                                    &elements,
+                                    index,
+                                    page_width,
+                                    page_height,
+                                    &visible_guides,
+                                );
+                                line_endpoint_position(&updated, endpoint).map_or(
+                                    SnapResult {
+                                        delta: raw_delta,
+                                        x: None,
+                                        y: None,
+                                    },
+                                    |point| {
+                                        snap_point(
+                                            point,
+                                            raw_delta,
+                                            &x_targets,
+                                            &y_targets,
+                                            snap_threshold,
+                                        )
+                                    },
+                                )
+                            } else {
+                                SnapResult {
+                                    delta: raw_delta,
+                                    x: None,
+                                    y: None,
+                                }
+                            };
+                            translate_line_endpoint(
+                                &mut updated,
+                                endpoint,
+                                snapped.delta[0],
+                                snapped.delta[1],
+                            );
+                            self.template.pages[self.current_page].elements[index] = updated;
+                            snap_feedback = snapped.into();
                             self.dirty = true;
                         }
                         if let Some(rotation) = interaction.rotation {
@@ -940,9 +1262,32 @@ impl StudioApp {
                                 &mut self.template.pages[self.current_page].elements[index],
                                 rotation,
                             );
+                            self.active_drag = None;
                             self.dirty = true;
                         }
+                        if interaction.drag_stopped {
+                            self.active_drag = None;
+                        }
                     }
+                    if self.show_guides {
+                        paint_rulers(
+                            &painter,
+                            page_rect,
+                            page_width,
+                            page_height,
+                            scale,
+                        );
+                        paint_and_interact_guides(
+                            ui,
+                            &painter,
+                            page_rect,
+                            scale,
+                            page_width,
+                            page_height,
+                            &mut self.guides[self.current_page],
+                        );
+                    }
+                    paint_snap_feedback(&painter, page_rect, scale, snap_feedback);
                 } else if let Err(error) = &preview {
                     paint_preview_error(&painter, page_rect, error);
                 }
@@ -1083,15 +1428,22 @@ impl StudioApp {
     }
 
     fn handle_shortcuts(&mut self, ctx: &egui::Context) {
-        let (save, save_as, open, duplicate, delete) = ctx.input(|input| {
-            (
-                input.modifiers.command && input.key_pressed(Key::S) && !input.modifiers.shift,
-                input.modifiers.command && input.modifiers.shift && input.key_pressed(Key::S),
-                input.modifiers.command && input.key_pressed(Key::O),
-                input.modifiers.command && input.key_pressed(Key::D),
-                input.key_pressed(Key::Delete) || input.key_pressed(Key::Backspace),
-            )
-        });
+        let (save, save_as, open, duplicate, delete, toggle_guides, toggle_snap) =
+            ctx.input(|input| {
+                (
+                    input.modifiers.command && input.key_pressed(Key::S) && !input.modifiers.shift,
+                    input.modifiers.command && input.modifiers.shift && input.key_pressed(Key::S),
+                    input.modifiers.command && input.key_pressed(Key::O),
+                    input.modifiers.command && input.key_pressed(Key::D),
+                    input.key_pressed(Key::Delete) || input.key_pressed(Key::Backspace),
+                    input.modifiers.command
+                        && !input.modifiers.shift
+                        && input.key_pressed(Key::Semicolon),
+                    input.modifiers.command
+                        && input.modifiers.shift
+                        && input.key_pressed(Key::Semicolon),
+                )
+            });
         if save {
             self.save_project(false);
         } else if save_as {
@@ -1125,6 +1477,14 @@ impl StudioApp {
                 }
             }
         }
+        if !ctx.wants_keyboard_input() {
+            if toggle_guides {
+                self.show_guides = !self.show_guides;
+            }
+            if toggle_snap {
+                self.snap_enabled = !self.snap_enabled;
+            }
+        }
     }
 }
 
@@ -1137,6 +1497,8 @@ impl eframe::App for StudioApp {
             self.template.pages.push(blank_page());
             self.current_page = 0;
         }
+        self.guides.resize_with(self.template.pages.len(), Vec::new);
+        self.guides.truncate(self.template.pages.len());
         self.handle_shortcuts(ctx);
         self.show_toolbar(ctx);
         self.show_left_panel(ctx);
@@ -1157,6 +1519,9 @@ impl eframe::App for StudioApp {
                 current_path: self.current_path.clone(),
                 current_page: self.current_page,
                 preview_data: self.preview_data.clone(),
+                guides: self.guides.clone(),
+                show_guides: self.show_guides,
+                snap_enabled: self.snap_enabled,
             },
         );
     }
@@ -1299,6 +1664,7 @@ struct ElementInteraction {
     resize: Option<Vec2>,
     line_endpoint: Option<(LineEndpoint, Vec2)>,
     rotation: Option<f32>,
+    drag_stopped: bool,
 }
 
 struct ElementPaintOptions {
@@ -1954,6 +2320,7 @@ fn paint_element(
         resize: None,
         line_endpoint: None,
         rotation: None,
+        drag_stopped: false,
     };
     if let Element::Line(line) = element {
         let start = page_point(page, scale, line.x1.to_points(), line.y1.to_points());
@@ -1971,6 +2338,7 @@ fn paint_element(
             Sense::click_and_drag(),
         );
         interaction.clicked = response.clicked();
+        interaction.drag_stopped |= response.drag_stopped();
         if response.hovered() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
         }
@@ -1996,9 +2364,9 @@ fn paint_element(
                     Sense::click_and_drag(),
                 );
                 interaction.clicked |= endpoint_response.clicked();
+                interaction.drag_stopped |= endpoint_response.drag_stopped();
                 if endpoint_response.dragged() {
-                    interaction.line_endpoint =
-                        Some((endpoint, ui.input(|input| input.pointer.delta())));
+                    interaction.line_endpoint = Some((endpoint, endpoint_response.drag_delta()));
                     interaction.translate = None;
                     ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
                 } else if endpoint_response.hovered() {
@@ -2007,7 +2375,7 @@ fn paint_element(
             }
         }
         if interaction.line_endpoint.is_none() && response.dragged() {
-            interaction.translate = Some(ui.input(|input| input.pointer.delta()));
+            interaction.translate = Some(response.drag_delta());
         }
         return interaction;
     }
@@ -2032,8 +2400,9 @@ fn paint_element(
         Sense::click_and_drag(),
     );
     interaction.clicked = response.clicked();
+    interaction.drag_stopped |= response.drag_stopped();
     if response.dragged() {
-        interaction.translate = Some(ui.input(|input| input.pointer.delta()));
+        interaction.translate = Some(response.drag_delta());
     }
     if response.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
@@ -2054,11 +2423,11 @@ fn paint_element(
             Id::new(("canvas-resize", options.index)),
             Sense::drag(),
         );
+        interaction.drag_stopped |= resize.drag_stopped();
         if resize.dragged() {
-            let delta =
-                inverse_rotate_vector(ui.input(|input| input.pointer.delta()), transform.angle);
+            let delta = inverse_rotate_vector(resize.drag_delta(), transform.angle);
             interaction.translate = None;
-            interaction.resize = Some(Vec2::new(rect.width() + delta.x, rect.height() - delta.y));
+            interaction.resize = Some(Vec2::new(delta.x, -delta.y));
             ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeNeSw);
         }
         if element_rotation(element).is_some() {
@@ -2073,6 +2442,7 @@ fn paint_element(
                 Id::new(("canvas-rotation", options.index)),
                 Sense::click_and_drag(),
             );
+            interaction.drag_stopped |= rotate.drag_stopped();
             if rotate.dragged()
                 && let Some(pointer) = ui.input(|input| input.pointer.interact_pos())
             {
@@ -2294,6 +2664,248 @@ fn paint_barcode_placeholder(
         CHARCOAL,
         transform,
     );
+}
+
+fn alignment_targets(
+    elements: &[Element],
+    moving_index: usize,
+    page_width: f32,
+    page_height: f32,
+    guides: &[EditorGuide],
+) -> (Vec<f32>, Vec<f32>) {
+    let mut x_targets = vec![0.0, page_width / 2.0, page_width];
+    let mut y_targets = vec![0.0, page_height / 2.0, page_height];
+    for guide in guides {
+        match guide.axis {
+            GuideAxis::Vertical => x_targets.push(guide.position_pt),
+            GuideAxis::Horizontal => y_targets.push(guide.position_pt),
+        }
+    }
+    for (index, element) in elements.iter().enumerate() {
+        if index == moving_index {
+            continue;
+        }
+        if let Some(bounds) = element_alignment_bounds(element) {
+            x_targets.extend([
+                bounds[0],
+                bounds[0] + bounds[2] / 2.0,
+                bounds[0] + bounds[2],
+            ]);
+            y_targets.extend([
+                bounds[1],
+                bounds[1] + bounds[3] / 2.0,
+                bounds[1] + bounds[3],
+            ]);
+        }
+    }
+    x_targets.sort_by(f32::total_cmp);
+    x_targets.dedup_by(|left, right| (*left - *right).abs() < 0.001);
+    y_targets.sort_by(f32::total_cmp);
+    y_targets.dedup_by(|left, right| (*left - *right).abs() < 0.001);
+    (x_targets, y_targets)
+}
+
+fn push_editor_guide(guides: &mut Vec<EditorGuide>, guide: EditorGuide) {
+    if !guides.iter().any(|existing| {
+        existing.axis == guide.axis && (existing.position_pt - guide.position_pt).abs() < 0.001
+    }) {
+        guides.push(guide);
+    }
+}
+
+fn line_endpoint_position(element: &Element, endpoint: LineEndpoint) -> Option<[f32; 2]> {
+    let Element::Line(line) = element else {
+        return None;
+    };
+    Some(match endpoint {
+        LineEndpoint::Start => [line.x1.to_points(), line.y1.to_points()],
+        LineEndpoint::End => [line.x2.to_points(), line.y2.to_points()],
+    })
+}
+
+fn paint_rulers(
+    painter: &egui::Painter,
+    page: Rect,
+    page_width: f32,
+    page_height: f32,
+    scale: f32,
+) {
+    const RULER_SIZE: f32 = 22.0;
+    let background = Color32::from_rgb(42, 48, 53);
+    let tick_color = Color32::from_gray(145);
+    let top = Rect::from_min_max(
+        Pos2::new(page.left(), page.top() - RULER_SIZE),
+        page.right_top(),
+    );
+    let left = Rect::from_min_max(
+        Pos2::new(page.left() - RULER_SIZE, page.top()),
+        page.left_bottom(),
+    );
+    painter.rect_filled(top, CornerRadius::ZERO, background);
+    painter.rect_filled(left, CornerRadius::ZERO, background);
+    let corner = Rect::from_min_max(
+        Pos2::new(page.left() - RULER_SIZE, page.top() - RULER_SIZE),
+        page.left_top(),
+    );
+    painter.rect_filled(corner, CornerRadius::ZERO, Color32::from_rgb(34, 40, 45));
+    painter.text(
+        corner.center(),
+        Align2::CENTER_CENTER,
+        "pt",
+        FontId::monospace(7.0),
+        Color32::from_gray(165),
+    );
+
+    let minor_step = if 18.0 * scale >= 6.0 { 18.0 } else { 36.0 };
+    let major_step = minor_step * 4.0;
+    let mut x = 0.0;
+    while x <= page_width + 0.001 {
+        let screen_x = page.left() + x * scale;
+        let major = (x / major_step).fract().abs() < 0.001;
+        let length = if major { 10.0 } else { 5.0 };
+        painter.line_segment(
+            [
+                Pos2::new(screen_x, top.bottom()),
+                Pos2::new(screen_x, top.bottom() - length),
+            ],
+            Stroke::new(1.0_f32, tick_color),
+        );
+        if major && x > 0.0 {
+            painter.text(
+                Pos2::new(screen_x + 3.0, top.top() + 3.0),
+                Align2::LEFT_TOP,
+                format!("{x:.0}"),
+                FontId::monospace(8.0),
+                Color32::from_gray(170),
+            );
+        }
+        x += minor_step;
+    }
+
+    let mut y = 0.0;
+    while y <= page_height + 0.001 {
+        let screen_y = page.bottom() - y * scale;
+        let major = (y / major_step).fract().abs() < 0.001;
+        let length = if major { 10.0 } else { 5.0 };
+        painter.line_segment(
+            [
+                Pos2::new(left.right(), screen_y),
+                Pos2::new(left.right() - length, screen_y),
+            ],
+            Stroke::new(1.0_f32, tick_color),
+        );
+        if major && y > 0.0 {
+            painter.text(
+                Pos2::new(left.left() + 2.0, screen_y - 3.0),
+                Align2::LEFT_BOTTOM,
+                format!("{y:.0}"),
+                FontId::monospace(7.0),
+                Color32::from_gray(170),
+            );
+        }
+        y += minor_step;
+    }
+}
+
+fn paint_and_interact_guides(
+    ui: &mut egui::Ui,
+    painter: &egui::Painter,
+    page: Rect,
+    scale: f32,
+    page_width: f32,
+    page_height: f32,
+    guides: &mut [EditorGuide],
+) {
+    let color = Color32::from_rgb(55, 190, 232);
+    for (index, guide) in guides.iter_mut().enumerate() {
+        match guide.axis {
+            GuideAxis::Vertical => {
+                let x = page.left() + guide.position_pt * scale;
+                painter.line_segment(
+                    [Pos2::new(x, page.top()), Pos2::new(x, page.bottom())],
+                    Stroke::new(1.0_f32, color),
+                );
+                let response = ui.interact(
+                    Rect::from_min_max(
+                        Pos2::new(x - 4.0, page.top()),
+                        Pos2::new(x + 4.0, page.bottom()),
+                    ),
+                    Id::new(("vertical-guide", index)),
+                    Sense::drag(),
+                );
+                if response.dragged()
+                    && let Some(pointer) = ui.input(|input| input.pointer.interact_pos())
+                {
+                    guide.position_pt = ((pointer.x - page.left()) / scale).clamp(0.0, page_width);
+                }
+                if response.hovered() || response.dragged() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+                }
+            }
+            GuideAxis::Horizontal => {
+                let y = page.bottom() - guide.position_pt * scale;
+                painter.line_segment(
+                    [Pos2::new(page.left(), y), Pos2::new(page.right(), y)],
+                    Stroke::new(1.0_f32, color),
+                );
+                let response = ui.interact(
+                    Rect::from_min_max(
+                        Pos2::new(page.left(), y - 4.0),
+                        Pos2::new(page.right(), y + 4.0),
+                    ),
+                    Id::new(("horizontal-guide", index)),
+                    Sense::drag(),
+                );
+                if response.dragged()
+                    && let Some(pointer) = ui.input(|input| input.pointer.interact_pos())
+                {
+                    guide.position_pt =
+                        ((page.bottom() - pointer.y) / scale).clamp(0.0, page_height);
+                }
+                if response.hovered() || response.dragged() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
+                }
+            }
+        }
+    }
+}
+
+fn paint_snap_feedback(painter: &egui::Painter, page: Rect, scale: f32, feedback: SnapFeedback) {
+    let color = Color32::from_rgb(232, 66, 190);
+    if let Some(x) = feedback.x {
+        let screen_x = page.left() + x * scale;
+        painter.line_segment(
+            [
+                Pos2::new(screen_x, page.top()),
+                Pos2::new(screen_x, page.bottom()),
+            ],
+            Stroke::new(1.25_f32, color),
+        );
+        painter.text(
+            Pos2::new(screen_x + 4.0, page.top() + 4.0),
+            Align2::LEFT_TOP,
+            format!("x {x:.1} pt"),
+            FontId::monospace(9.0),
+            color,
+        );
+    }
+    if let Some(y) = feedback.y {
+        let screen_y = page.bottom() - y * scale;
+        painter.line_segment(
+            [
+                Pos2::new(page.left(), screen_y),
+                Pos2::new(page.right(), screen_y),
+            ],
+            Stroke::new(1.25_f32, color),
+        );
+        painter.text(
+            Pos2::new(page.left() + 4.0, screen_y - 4.0),
+            Align2::LEFT_BOTTOM,
+            format!("y {y:.1} pt"),
+            FontId::monospace(9.0),
+            color,
+        );
+    }
 }
 
 fn paint_grid(painter: &egui::Painter, page: Rect, width: f32, height: f32, scale: f32) {
@@ -2835,11 +3447,12 @@ mod tests {
     use print_forge_template::{Color as PrintColor, Element};
 
     use super::{
-        PreviewErrorCopy, ScreenTransform, first_template_variable, inverse_rotate_vector,
-        parse_color, preview_error_copy, print_color, resolve_preview, rgb_hex, safe_stem,
+        EditorGuide, GuideAxis, PersistedState, PreviewErrorCopy, ScreenTransform,
+        alignment_targets, first_template_variable, inverse_rotate_vector, parse_color,
+        preview_error_copy, print_color, push_editor_guide, resolve_preview, rgb_hex, safe_stem,
         serialize_template,
     };
-    use crate::model::starter_template;
+    use crate::model::{ElementKind, new_element, starter_template};
 
     #[test]
     fn serialized_studio_templates_round_trip() {
@@ -2852,6 +3465,43 @@ mod tests {
     #[test]
     fn output_names_are_safe() {
         assert_eq!(safe_stem(" ACME / Summer Catalog "), "acme-summer-catalog");
+    }
+
+    #[test]
+    fn older_studio_state_defaults_to_visible_enabled_guides() {
+        let state: PersistedState = serde_json::from_value(serde_json::json!({
+            "template": starter_template(),
+            "current_path": null,
+            "current_page": 0,
+            "preview_data": "{}"
+        }))
+        .unwrap();
+
+        assert!(state.guides.is_empty());
+        assert!(state.show_guides);
+        assert!(state.snap_enabled);
+    }
+
+    #[test]
+    fn alignment_targets_include_page_guides_and_neighboring_layers() {
+        let elements = vec![
+            new_element(ElementKind::Text, 0.0),
+            new_element(ElementKind::Rectangle, 0.0),
+        ];
+        let mut guides = Vec::new();
+        let guide = EditorGuide {
+            axis: GuideAxis::Vertical,
+            position_pt: 100.0,
+        };
+        push_editor_guide(&mut guides, guide);
+        push_editor_guide(&mut guides, guide);
+        let (x_targets, y_targets) = alignment_targets(&elements, 0, 612.0, 792.0, &guides);
+
+        assert_eq!(guides, [guide]);
+        assert!(x_targets.contains(&100.0));
+        assert!(x_targets.contains(&306.0));
+        assert!(x_targets.contains(&54.0));
+        assert!(y_targets.contains(&396.0));
     }
 
     #[test]

@@ -30,6 +30,13 @@ pub enum LayerMove {
     Front,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SnapResult {
+    pub delta: [f32; 2],
+    pub x: Option<f32>,
+    pub y: Option<f32>,
+}
+
 impl ElementKind {
     pub const ALL: [Self; 7] = [
         Self::Text,
@@ -218,6 +225,34 @@ pub fn element_bounds_mut(element: &mut Element) -> Option<&mut Bounds> {
     }
 }
 
+pub fn element_alignment_bounds(element: &Element) -> Option<[f32; 4]> {
+    if let Element::Line(line) = element {
+        let x1 = line.x1.to_points();
+        let y1 = line.y1.to_points();
+        let x2 = line.x2.to_points();
+        let y2 = line.y2.to_points();
+        return Some([x1.min(x2), y1.min(y2), (x2 - x1).abs(), (y2 - y1).abs()]);
+    }
+    let bounds = bounds_points(element_bounds(element)?);
+    let rotation = element_rotation(element).unwrap_or(0.0).to_radians();
+    if rotation.abs() < f32::EPSILON {
+        return Some(bounds);
+    }
+    let half_width = bounds[2] / 2.0;
+    let half_height = bounds[3] / 2.0;
+    let rotated_half_width = rotation.cos().abs() * half_width + rotation.sin().abs() * half_height;
+    let rotated_half_height =
+        rotation.sin().abs() * half_width + rotation.cos().abs() * half_height;
+    let center_x = bounds[0] + half_width;
+    let center_y = bounds[1] + half_height;
+    Some([
+        center_x - rotated_half_width,
+        center_y - rotated_half_height,
+        rotated_half_width * 2.0,
+        rotated_half_height * 2.0,
+    ])
+}
+
 pub fn element_rotation(element: &Element) -> Option<f32> {
     match element {
         Element::Text(value) => Some(value.rotation),
@@ -313,6 +348,94 @@ pub fn reorder_element(elements: &mut Vec<Element>, index: usize, movement: Laye
     target
 }
 
+pub fn snap_translation(
+    bounds: [f32; 4],
+    delta: [f32; 2],
+    x_targets: &[f32],
+    y_targets: &[f32],
+    threshold: f32,
+) -> SnapResult {
+    let x_points = [
+        bounds[0] + delta[0],
+        bounds[0] + bounds[2] / 2.0 + delta[0],
+        bounds[0] + bounds[2] + delta[0],
+    ];
+    let y_points = [
+        bounds[1] + delta[1],
+        bounds[1] + bounds[3] / 2.0 + delta[1],
+        bounds[1] + bounds[3] + delta[1],
+    ];
+    let x_snap = closest_snap(&x_points, x_targets, threshold);
+    let y_snap = closest_snap(&y_points, y_targets, threshold);
+    SnapResult {
+        delta: [
+            delta[0] + x_snap.map_or(0.0, |snap| snap.0),
+            delta[1] + y_snap.map_or(0.0, |snap| snap.0),
+        ],
+        x: x_snap.map(|snap| snap.1),
+        y: y_snap.map(|snap| snap.1),
+    }
+}
+
+pub fn snap_point(
+    point: [f32; 2],
+    delta: [f32; 2],
+    x_targets: &[f32],
+    y_targets: &[f32],
+    threshold: f32,
+) -> SnapResult {
+    snap_translation(
+        [point[0], point[1], 0.0, 0.0],
+        delta,
+        x_targets,
+        y_targets,
+        threshold,
+    )
+}
+
+pub fn snap_size(
+    bounds: [f32; 4],
+    size_delta: [f32; 2],
+    x_targets: &[f32],
+    y_targets: &[f32],
+    threshold: f32,
+) -> SnapResult {
+    let right = bounds[0] + bounds[2] + size_delta[0];
+    let top = bounds[1] + bounds[3] + size_delta[1];
+    let valid_x_targets = x_targets
+        .iter()
+        .copied()
+        .filter(|target| *target >= bounds[0] + 1.0)
+        .collect::<Vec<_>>();
+    let valid_y_targets = y_targets
+        .iter()
+        .copied()
+        .filter(|target| *target >= bounds[1] + 1.0)
+        .collect::<Vec<_>>();
+    let x_snap = closest_snap(&[right], &valid_x_targets, threshold);
+    let y_snap = closest_snap(&[top], &valid_y_targets, threshold);
+    SnapResult {
+        delta: [
+            size_delta[0] + x_snap.map_or(0.0, |snap| snap.0),
+            size_delta[1] + y_snap.map_or(0.0, |snap| snap.0),
+        ],
+        x: x_snap.map(|snap| snap.1),
+        y: y_snap.map(|snap| snap.1),
+    }
+}
+
+fn closest_snap(points: &[f32], targets: &[f32], threshold: f32) -> Option<(f32, f32)> {
+    points
+        .iter()
+        .flat_map(|point| {
+            targets
+                .iter()
+                .map(move |target| (*target - *point, *target))
+        })
+        .filter(|(correction, _)| correction.abs() <= threshold)
+        .min_by(|left, right| left.0.abs().total_cmp(&right.0.abs()))
+}
+
 pub fn resize_element(element: &mut Element, width_points: f32, height_points: f32) {
     if let Some(bounds) = element_bounds_mut(element) {
         set_points(&mut bounds.width, width_points.max(1.0));
@@ -360,8 +483,9 @@ mod tests {
     use print_forge_validation::validate_template;
 
     use super::{
-        ElementKind, LayerMove, LineEndpoint, bounds_points, element_bounds, element_rotation,
-        new_element, reorder_element, set_element_rotation, starter_template, translate_element,
+        ElementKind, LayerMove, LineEndpoint, bounds_points, element_alignment_bounds,
+        element_bounds, element_rotation, new_element, reorder_element, set_element_rotation,
+        snap_point, snap_size, snap_translation, starter_template, translate_element,
         translate_line_endpoint,
     };
 
@@ -423,5 +547,45 @@ mod tests {
         let selected = reorder_element(&mut elements, selected, LayerMove::Backward);
         assert_eq!(selected, 1);
         assert!(matches!(elements[1], Element::Text(_)));
+    }
+
+    #[test]
+    fn rotated_elements_snap_using_their_visible_alignment_bounds() {
+        let mut rectangle = new_element(ElementKind::Rectangle, 0.0);
+        set_element_rotation(&mut rectangle, 90.0);
+
+        let bounds = element_alignment_bounds(&rectangle).unwrap();
+        assert!((bounds[2] - 90.0).abs() < 0.001);
+        assert!((bounds[3] - 180.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn translation_snaps_edges_and_centers_to_the_closest_target() {
+        let snapped = snap_translation(
+            [10.0, 20.0, 30.0, 40.0],
+            [7.0, 8.0],
+            &[0.0, 50.0, 100.0],
+            &[0.0, 50.0, 100.0],
+            4.0,
+        );
+
+        assert_eq!(snapped.delta, [10.0, 10.0]);
+        assert_eq!(snapped.x, Some(50.0));
+        assert_eq!(snapped.y, Some(50.0));
+    }
+
+    #[test]
+    fn points_and_resize_handles_snap_independently() {
+        let point = snap_point([10.0, 10.0], [7.0, 38.0], &[20.0], &[50.0], 3.0);
+        assert_eq!(point.delta, [10.0, 40.0]);
+
+        let size = snap_size(
+            [10.0, 10.0, 20.0, 20.0],
+            [18.0, 17.0],
+            &[50.0],
+            &[50.0],
+            3.0,
+        );
+        assert_eq!(size.delta, [20.0, 20.0]);
     }
 }
