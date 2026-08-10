@@ -50,7 +50,7 @@ pub(crate) struct RenderArgs {
     /// Reject images below this effective output resolution.
     #[arg(long, value_name = "DPI")]
     pub(crate) min_image_dpi: Option<f32>,
-    /// Reject built-in PDF fonts instead of accepting unembedded text fonts.
+    /// Embed supported built-in fonts and require every text font to be embedded.
     #[arg(long)]
     pub(crate) require_embedded_fonts: bool,
     /// Generate and validate against a PDF/X conformance target.

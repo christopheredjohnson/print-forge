@@ -94,7 +94,7 @@ separate mode.
 | `--summary <PATH>` | None | Write a JSON job summary with results, warnings, output paths, and elapsed time. |
 | `--print-ready` | Off | Enable PDF/X-4, 300 DPI image preflight, and mandatory embedded fonts. |
 | `--min-image-dpi <DPI>` | None | Reject images below the specified effective output resolution. |
-| `--require-embedded-fonts` | Off | Reject built-in PDF fonts and require embedded external fonts. |
+| `--require-embedded-fonts` | Off | Embed bundled Helvetica variants and require every text font to be embedded. |
 | `--pdf-x <x4>` | None | Generate and validate against the selected PDF/X target. |
 | `--dry-run` | Off | Validate, lay out, render, and preflight selected rows without writing files. |
 
@@ -185,6 +185,11 @@ image preflight, mandatory embedded fonts, document metadata, and explicit
 media, bleed, crop, and trim boxes. PDF/X output is validated after
 serialization and rejected if its version, XMP declaration, output intent, ICC
 profile, page boxes, or embedded fonts are incomplete.
+
+Built-in Helvetica regular, bold, oblique, and bold-oblique faces are replaced
+with their bundled embeddable equivalents when embedded fonts are required.
+Other built-in families must be declared under `fonts` with external font files
+so print-ready output never silently substitutes an unrelated typeface.
 
 Colors use one of three strict forms: `#RRGGBB`, `rgb(R, G, B)` with integer
 components from 0 to 255, or `cmyk(C%, M%, Y%, K%)` with percentages from 0 to

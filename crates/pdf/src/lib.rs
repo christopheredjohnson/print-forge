@@ -109,7 +109,7 @@ impl PdfRenderer {
         let height = points_to_mm(media_height_pt);
         let mut pdf = PdfDocument::new(&document.title);
         configure_metadata(&mut pdf, document, options);
-        let mut fonts = BTreeMap::new();
+        let mut fonts = FontResources::default();
         let mut images = BTreeMap::new();
         let mut svgs = BTreeMap::new();
         let mut pages = Vec::with_capacity(document.pages.len());
@@ -132,7 +132,9 @@ impl PdfRenderer {
                     });
                 }
                 let result = match &command.command {
-                    DrawCommand::Text(text) => render_text(text, &mut pdf, &mut fonts, &mut ops),
+                    DrawCommand::Text(text) => {
+                        render_text(text, &mut pdf, &mut fonts, options, &mut ops)
+                    }
                     DrawCommand::Rectangle(rectangle) => render_rectangle(rectangle, &mut ops),
                     DrawCommand::Line(line) => render_line(line, &mut ops),
                     DrawCommand::Image(image) => {
@@ -273,8 +275,9 @@ fn preflight_document_inner(document: &ResolvedDocument, options: &PdfRenderOpti
             match &command.command {
                 DrawCommand::Text(text) if require_embedded_fonts => {
                     if let ResolvedFont::Builtin(name) = &text.font {
-                        bail!(
-                            "page {page_index}, element {}: font {name:?} is a built-in PDF font; print-ready output requires an embedded external font",
+                        ensure!(
+                            bundled_font(name).is_some(),
+                            "page {page_index}, element {}: built-in font {name:?} has no bundled embeddable equivalent; declare an external font family for print-ready output",
                             command.source_path
                         );
                     }
@@ -617,10 +620,16 @@ fn ensure_fonts_embedded(document: &LoDocument) -> Result<()> {
 fn render_text(
     command: &TextCommand,
     pdf: &mut PdfDocument,
-    fonts: &mut BTreeMap<PathBuf, PdfFontHandle>,
+    fonts: &mut FontResources,
+    options: &PdfRenderOptions,
     ops: &mut Vec<Op>,
 ) -> Result<()> {
-    let font = pdf_font(&command.font, pdf, fonts)?;
+    let font = pdf_font(
+        &command.font,
+        pdf,
+        fonts,
+        options.require_embedded_fonts || options.pdf_x.is_some(),
+    )?;
     let color = pdf_color(command.color);
 
     ops.push(Op::SaveGraphicsState);
@@ -655,30 +664,88 @@ fn render_text(
     Ok(())
 }
 
+#[derive(Default)]
+struct FontResources {
+    external: BTreeMap<PathBuf, PdfFontHandle>,
+    bundled: BTreeMap<&'static str, PdfFontHandle>,
+}
+
+impl FontResources {
+    fn next_id(&self) -> FontId {
+        FontId(format!(
+            "font-{:04}",
+            self.external.len() + self.bundled.len() + 1
+        ))
+    }
+}
+
 fn pdf_font(
     font: &ResolvedFont,
     pdf: &mut PdfDocument,
-    fonts: &mut BTreeMap<PathBuf, PdfFontHandle>,
+    fonts: &mut FontResources,
+    embed_builtins: bool,
 ) -> Result<PdfFontHandle> {
     match font {
+        ResolvedFont::Builtin(name) if embed_builtins => {
+            let (canonical_name, bytes) = bundled_font(name).ok_or_else(|| {
+                anyhow!(
+                    "built-in font {name:?} has no bundled embeddable equivalent; declare an external font family"
+                )
+            })?;
+            if let Some(font) = fonts.bundled.get(canonical_name) {
+                return Ok(font.clone());
+            }
+            let parsed = ParsedFont::from_bytes(bytes, 0, &mut Vec::new())
+                .ok_or_else(|| anyhow!("failed to parse bundled font {canonical_name:?}"))?;
+            let id = fonts.next_id();
+            pdf.resources
+                .fonts
+                .map
+                .insert(id.clone(), PdfFont::new(parsed));
+            let handle = PdfFontHandle::External(id);
+            fonts.bundled.insert(canonical_name, handle.clone());
+            Ok(handle)
+        }
         ResolvedFont::Builtin(name) => Ok(PdfFontHandle::Builtin(builtin_font(name)?)),
         ResolvedFont::External(path) => {
-            if let Some(font) = fonts.get(path) {
+            if let Some(font) = fonts.external.get(path) {
                 return Ok(font.clone());
             }
             let bytes = fs::read(path)
                 .with_context(|| format!("failed to read font {}", path.display()))?;
             let parsed = ParsedFont::from_bytes(&bytes, 0, &mut Vec::new())
                 .ok_or_else(|| anyhow!("failed to parse font {}", path.display()))?;
-            let id = FontId(format!("font-{:04}", fonts.len() + 1));
+            let id = fonts.next_id();
             pdf.resources
                 .fonts
                 .map
                 .insert(id.clone(), PdfFont::new(parsed));
             let handle = PdfFontHandle::External(id);
-            fonts.insert(path.clone(), handle.clone());
+            fonts.external.insert(path.clone(), handle.clone());
             Ok(handle)
         }
+    }
+}
+
+fn bundled_font(name: &str) -> Option<(&'static str, &'static [u8])> {
+    match name.to_ascii_lowercase().as_str() {
+        "helvetica" | "sans-serif" => Some((
+            "helvetica",
+            include_bytes!("../../../examples/assets/fonts/Helvetica.ttf"),
+        )),
+        "helvetica-bold" => Some((
+            "helvetica-bold",
+            include_bytes!("../../../examples/assets/fonts/Helvetica-Bold.ttf"),
+        )),
+        "helvetica-oblique" => Some((
+            "helvetica-oblique",
+            include_bytes!("../../../examples/assets/fonts/Helvetica-Oblique.ttf"),
+        )),
+        "helvetica-bold-oblique" => Some((
+            "helvetica-bold-oblique",
+            include_bytes!("../../../examples/assets/fonts/Helvetica-BoldOblique.ttf"),
+        )),
+        _ => None,
     }
 }
 
@@ -1323,23 +1390,42 @@ mod tests {
     }
 
     #[test]
-    fn print_preflight_rejects_unembedded_fonts() {
+    fn print_ready_embeds_bundled_helvetica_variants() {
+        for name in [
+            "helvetica",
+            "helvetica-bold",
+            "helvetica-oblique",
+            "helvetica-bold-oblique",
+        ] {
+            let mut document = print_ready_fixture();
+            let DrawCommand::Text(text) = &mut document.pages[0].commands[0].command else {
+                panic!("expected text command");
+            };
+            text.font = ResolvedFont::Builtin(name.to_owned());
+
+            let bytes = PdfRenderer
+                .render_with_options(&document, &PdfRenderOptions::print_ready())
+                .unwrap();
+
+            validate_pdf_x(&bytes, PdfXStandard::X4).unwrap();
+        }
+    }
+
+    #[test]
+    fn print_preflight_rejects_builtins_without_an_embeddable_equivalent() {
         let mut document = print_ready_fixture();
         let DrawCommand::Text(text) = &mut document.pages[0].commands[0].command else {
             panic!("expected text command");
         };
-        text.font = ResolvedFont::Builtin("helvetica".to_owned());
-        let options = PdfRenderOptions {
-            require_embedded_fonts: true,
-            ..Default::default()
-        };
+        text.font = ResolvedFont::Builtin("times-roman".to_owned());
 
         let error = PdfRenderer
-            .render_with_options(&document, &options)
+            .render_with_options(&document, &PdfRenderOptions::print_ready())
             .unwrap_err()
             .to_string();
 
-        assert!(error.contains("requires an embedded external font"));
+        assert!(error.contains("has no bundled embeddable equivalent"));
+        assert!(error.contains("declare an external font family"));
     }
 
     #[test]
