@@ -1,4 +1,10 @@
-use std::{collections::HashMap, fs, path::Path, path::PathBuf};
+use std::{
+    collections::{BTreeSet, HashMap},
+    fs,
+    ops::Deref,
+    path::Path,
+    path::PathBuf,
+};
 
 use eframe::egui::{
     self, Align, Align2, Color32, ComboBox, CornerRadius, FontId, Frame, Id, Key, Layout, Margin,
@@ -7,7 +13,8 @@ use eframe::egui::{
 };
 use print_forge_dataset::DataRow;
 use print_forge_engine::{
-    BasicLayoutEngine, DrawCommand, LayoutOptions, LineDash, ResolvedDocument, ResolvedPage,
+    BasicLayoutEngine, DrawCommand, ElementLayoutError, LayoutError, LayoutOptions, LineDash,
+    ResolvedDocument, ResolvedPage,
 };
 use print_forge_pdf::{PdfRenderOptions, PdfRenderer};
 use print_forge_template::{
@@ -74,6 +81,19 @@ enum AssetKind {
 #[derive(Default)]
 struct AssetCache {
     textures: HashMap<(PathBuf, AssetKind), Result<TextureHandle, String>>,
+}
+
+struct ResolvedPreview {
+    document: ResolvedDocument,
+    placeholder_variables: Vec<String>,
+}
+
+impl Deref for ResolvedPreview {
+    type Target = ResolvedDocument;
+
+    fn deref(&self) -> &Self::Target {
+        &self.document
+    }
 }
 
 pub struct StudioApp {
@@ -287,7 +307,7 @@ impl StudioApp {
         }
     }
 
-    fn preview_document(&self) -> Result<ResolvedDocument, String> {
+    fn preview_document(&self) -> Result<ResolvedPreview, String> {
         resolve_preview(&self.template, &self.preview_data, self.asset_base())
     }
 
@@ -688,6 +708,22 @@ impl StudioApp {
                                     self.preview_page += 1;
                                 }
                             }
+                            if let Ok(preview) = &preview
+                                && !preview.placeholder_variables.is_empty()
+                            {
+                                let count = preview.placeholder_variables.len();
+                                ui.label(
+                                    RichText::new(format!(
+                                        "{count} missing value{}",
+                                        if count == 1 { "" } else { "s" }
+                                    ))
+                                    .color(Color32::from_rgb(235, 164, 70)),
+                                )
+                                .on_hover_text(format!(
+                                    "Using placeholders for: {}",
+                                    preview.placeholder_variables.join(", ")
+                                ));
+                            }
                             ui.separator();
                             ui.label(RichText::new("Zoom").color(Color32::from_gray(150)));
                             ui.add(
@@ -1057,12 +1093,115 @@ fn resolve_preview(
     template: &Template,
     preview_data: &str,
     asset_base: PathBuf,
-) -> Result<ResolvedDocument, String> {
-    let data = serde_json::from_str::<DataRow>(preview_data)
+) -> Result<ResolvedPreview, String> {
+    let mut data = serde_json::from_str::<DataRow>(preview_data)
         .map_err(|error| format!("Preview data is not a JSON object: {error}"))?;
-    BasicLayoutEngine
-        .layout_with_options(template, &data, &LayoutOptions { asset_base })
-        .map_err(|error| format!("Preview layout failed: {error}"))
+    let options = LayoutOptions { asset_base };
+    let mut placeholder_variables = BTreeSet::new();
+    for _ in 0..128 {
+        match BasicLayoutEngine.layout_with_options(template, &data, &options) {
+            Ok(document) => {
+                return Ok(ResolvedPreview {
+                    document,
+                    placeholder_variables: placeholder_variables.into_iter().collect(),
+                });
+            }
+            Err(error) => {
+                let Some(variable) = missing_layout_variable(&error) else {
+                    return Err(format!("Preview layout failed: {error}"));
+                };
+                let value = if is_collection_variable(template, variable) {
+                    serde_json::Value::Array(Vec::new())
+                } else {
+                    serde_json::Value::String(format!("{{{{{variable}}}}}"))
+                };
+                if !insert_missing_preview_value(&mut data, variable, value) {
+                    return Err(format!("Preview layout failed: {error}"));
+                }
+                placeholder_variables.insert(variable.to_owned());
+            }
+        }
+    }
+    Err(
+        "Preview needs more than 128 placeholder values; add representative preview data"
+            .to_owned(),
+    )
+}
+
+fn missing_layout_variable(error: &LayoutError) -> Option<&str> {
+    let LayoutError::Element { source, .. } = error else {
+        return None;
+    };
+    missing_element_variable(source)
+}
+
+fn missing_element_variable(error: &ElementLayoutError) -> Option<&str> {
+    match error {
+        ElementLayoutError::MissingVariable(variable) => Some(variable),
+        ElementLayoutError::Nested { source, .. } => missing_element_variable(source),
+        _ => None,
+    }
+}
+
+fn insert_missing_preview_value(data: &mut DataRow, path: &str, value: serde_json::Value) -> bool {
+    let segments = path.split('.').collect::<Vec<_>>();
+    insert_missing_json_path(data, &segments, value)
+}
+
+fn insert_missing_json_path(
+    object: &mut serde_json::Map<String, serde_json::Value>,
+    segments: &[&str],
+    value: serde_json::Value,
+) -> bool {
+    let Some((segment, remaining)) = segments.split_first() else {
+        return false;
+    };
+    if remaining.is_empty() {
+        if object.contains_key(*segment) {
+            return false;
+        }
+        object.insert((*segment).to_owned(), value);
+        return true;
+    }
+    let child = object
+        .entry((*segment).to_owned())
+        .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+    let Some(child) = child.as_object_mut() else {
+        return false;
+    };
+    insert_missing_json_path(child, remaining, value)
+}
+
+fn is_collection_variable(template: &Template, variable: &str) -> bool {
+    template
+        .fields
+        .iter()
+        .any(|field| field.name == variable && field.field_type == FieldType::Collection)
+        || template.pages.iter().any(|page| {
+            page.header
+                .iter()
+                .chain(&page.elements)
+                .chain(&page.footer)
+                .any(|element| element_uses_collection(element, variable))
+        })
+}
+
+fn element_uses_collection(element: &Element, variable: &str) -> bool {
+    match element {
+        Element::Table(table) => table.source == variable,
+        Element::Repeater(repeater) => {
+            repeater.source == variable || element_uses_collection(&repeater.template, variable)
+        }
+        Element::Group(group) => group
+            .children
+            .iter()
+            .any(|child| element_uses_collection(child, variable)),
+        Element::Stack(stack) => stack
+            .children
+            .iter()
+            .any(|child| element_uses_collection(child, variable)),
+        _ => false,
+    }
 }
 
 fn resolved_template_page(
@@ -1317,10 +1456,27 @@ fn paint_asset(
     kind: AssetKind,
     assets: &mut AssetCache,
 ) {
+    let path_text = path.to_string_lossy();
+    if let Some(variable) = first_template_variable(&path_text) {
+        let title = match kind {
+            AssetKind::Raster => "IMAGE PLACEHOLDER",
+            AssetKind::Svg => "SVG PLACEHOLDER",
+        };
+        let detail = format!("{{{{{variable}}}}}");
+        paint_placeholder(painter, bounds, title, &detail);
+        return;
+    }
     match asset_texture(ctx, path, kind, assets) {
         Ok(texture) => paint_fitted_texture(painter, bounds, &texture, fit),
         Err(error) => paint_placeholder(painter, bounds, "ASSET UNAVAILABLE", &error),
     }
+}
+
+fn first_template_variable(value: &str) -> Option<&str> {
+    let start = value.find("{{")? + 2;
+    let end = value[start..].find("}}")? + start;
+    let variable = value[start..end].trim();
+    (!variable.is_empty()).then_some(variable)
 }
 
 fn asset_texture(
@@ -2307,8 +2463,8 @@ mod tests {
     use print_forge_template::{Color as PrintColor, Element};
 
     use super::{
-        PreviewErrorCopy, parse_color, preview_error_copy, print_color, resolve_preview, rgb_hex,
-        safe_stem, serialize_template,
+        PreviewErrorCopy, first_template_variable, parse_color, preview_error_copy, print_color,
+        resolve_preview, rgb_hex, safe_stem, serialize_template,
     };
     use crate::model::starter_template;
 
@@ -2340,6 +2496,28 @@ mod tests {
         };
 
         assert_eq!(text.lines[0].value, "Hello Ada");
+        assert!(preview.placeholder_variables.is_empty());
+    }
+
+    #[test]
+    fn rendered_preview_keeps_placeholders_for_missing_values() {
+        let mut template = starter_template();
+        let Element::Text(text) = &mut template.pages[0].elements[0] else {
+            panic!("starter element should be text");
+        };
+        text.value = "Hello {{first_name}} {{last_name}}".to_owned();
+
+        let preview = resolve_preview(&template, "{}", PathBuf::from(".")).unwrap();
+        let DrawCommand::Text(text) = &preview.pages[0].commands[0].command else {
+            panic!("resolved preview command should be text");
+        };
+
+        assert_eq!(text.lines[0].value, "Hello {{first_name}} {{last_name}}");
+        assert_eq!(preview.placeholder_variables, ["first_name", "last_name"]);
+        assert_eq!(
+            first_template_variable("/assets/{{profile.photo}}"),
+            Some("profile.photo")
+        );
     }
 
     #[test]

@@ -38,10 +38,12 @@ rendering through the Print Forge layout and PDF crates. Both the design canvas
 and its read-only rendered-preview mode use resolved engine output, so preview
 data, wrapped text, flow pagination, composed elements, raster images, SVG
 artwork, QR codes, and Code 128 bars are represented on screen. Generated
-continuation pages can be
-navigated directly in rendered-preview mode, and bleed and trim boundaries are
-shown separately. Screen font rasterization is still an approximation; the
-rendered PDF remains authoritative for final typography and print inspection.
+continuation pages can be navigated directly in rendered-preview mode, and bleed
+and trim boundaries are shown separately. Missing preview values remain visible
+as `{{field}}` placeholders and are reported in the canvas toolbar instead of
+preventing the preview from rendering. Screen font rasterization is still an
+approximation; the rendered PDF remains authoritative for final typography and
+print inspection.
 Imported tables, groups, stacks, and repeaters remain editable through the JSON
 view while their dedicated visual inspectors are developed.
 
