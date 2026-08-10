@@ -627,7 +627,7 @@ impl StudioApp {
                                 self.dirty = true;
                             }
                             if ui
-                                .add_enabled(index > 0, egui::Button::new("↓"))
+                                .add_enabled(index > 0, egui::Button::new("Lower"))
                                 .on_hover_text("Move backward one layer")
                                 .clicked()
                             {
@@ -640,7 +640,7 @@ impl StudioApp {
                                 self.dirty = true;
                             }
                             if ui
-                                .add_enabled(index + 1 < layer_count, egui::Button::new("↑"))
+                                .add_enabled(index + 1 < layer_count, egui::Button::new("Raise"))
                                 .on_hover_text("Move forward one layer")
                                 .clicked()
                             {
