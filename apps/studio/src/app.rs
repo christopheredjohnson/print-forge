@@ -91,6 +91,14 @@ struct ElementDragState {
     index: usize,
     kind: ElementDragKind,
     original: Element,
+    accumulated: Vec2,
+}
+
+impl ElementDragState {
+    fn advance(&mut self, frame_delta: Vec2) -> (Element, Vec2) {
+        self.accumulated += frame_delta;
+        (self.original.clone(), self.accumulated)
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
@@ -406,7 +414,12 @@ impl StudioApp {
             .to_owned()
     }
 
-    fn original_for_drag(&mut self, index: usize, kind: ElementDragKind) -> Element {
+    fn drag_from_origin(
+        &mut self,
+        index: usize,
+        kind: ElementDragKind,
+        frame_delta: Vec2,
+    ) -> (Element, Vec2) {
         let should_reset = self.active_drag.as_ref().is_none_or(|drag| {
             drag.page != self.current_page || drag.index != index || drag.kind != kind
         });
@@ -416,9 +429,11 @@ impl StudioApp {
                 index,
                 kind,
                 original: self.template.pages[self.current_page].elements[index].clone(),
+                accumulated: Vec2::ZERO,
             });
         }
-        self.active_drag.as_ref().unwrap().original.clone()
+        let drag = self.active_drag.as_mut().unwrap();
+        drag.advance(frame_delta)
     }
 
     fn confirm_discard(&self) -> bool {
@@ -1122,9 +1137,12 @@ impl StudioApp {
                             self.selection = Selection::Element(index);
                         }
                         if let Some(delta) = interaction.translate {
-                            let mut updated =
-                                self.original_for_drag(index, ElementDragKind::Translate);
-                            let raw_delta = [delta.x / scale, -delta.y / scale];
+                            let (mut updated, total_delta) = self.drag_from_origin(
+                                index,
+                                ElementDragKind::Translate,
+                                delta,
+                            );
+                            let raw_delta = [total_delta.x / scale, -total_delta.y / scale];
                             let snapped = if snapping_active {
                                 let (x_targets, y_targets) = alignment_targets(
                                     &elements,
@@ -1162,10 +1180,10 @@ impl StudioApp {
                             self.dirty = true;
                         }
                         if let Some(delta) = interaction.resize {
-                            let mut updated =
-                                self.original_for_drag(index, ElementDragKind::Resize);
+                            let (mut updated, total_delta) =
+                                self.drag_from_origin(index, ElementDragKind::Resize, delta);
                             let original_bounds = element_bounds(&updated).map(bounds_points);
-                            let raw_delta = [delta.x / scale, delta.y / scale];
+                            let raw_delta = [total_delta.x / scale, total_delta.y / scale];
                             let snapped = if snapping_active
                                 && element_rotation(&updated).is_some_and(|angle| angle == 0.0)
                             {
@@ -1211,11 +1229,12 @@ impl StudioApp {
                             self.dirty = true;
                         }
                         if let Some((endpoint, delta)) = interaction.line_endpoint {
-                            let mut updated = self.original_for_drag(
+                            let (mut updated, total_delta) = self.drag_from_origin(
                                 index,
                                 ElementDragKind::LineEndpoint(endpoint),
+                                delta,
                             );
-                            let raw_delta = [delta.x / scale, -delta.y / scale];
+                            let raw_delta = [total_delta.x / scale, -total_delta.y / scale];
                             let snapped = if snapping_active {
                                 let (x_targets, y_targets) = alignment_targets(
                                     &elements,
@@ -3447,10 +3466,10 @@ mod tests {
     use print_forge_template::{Color as PrintColor, Element};
 
     use super::{
-        EditorGuide, GuideAxis, PersistedState, PreviewErrorCopy, ScreenTransform,
-        alignment_targets, first_template_variable, inverse_rotate_vector, parse_color,
-        preview_error_copy, print_color, push_editor_guide, resolve_preview, rgb_hex, safe_stem,
-        serialize_template,
+        EditorGuide, ElementDragKind, ElementDragState, GuideAxis, PersistedState,
+        PreviewErrorCopy, ScreenTransform, alignment_targets, first_template_variable,
+        inverse_rotate_vector, parse_color, preview_error_copy, print_color, push_editor_guide,
+        resolve_preview, rgb_hex, safe_stem, serialize_template,
     };
     use crate::model::{ElementKind, new_element, starter_template};
 
@@ -3502,6 +3521,25 @@ mod tests {
         assert!(x_targets.contains(&306.0));
         assert!(x_targets.contains(&54.0));
         assert!(y_targets.contains(&396.0));
+    }
+
+    #[test]
+    fn drag_sessions_accumulate_per_frame_pointer_movement() {
+        let original = new_element(ElementKind::Text, 0.0);
+        let mut drag = ElementDragState {
+            page: 0,
+            index: 0,
+            kind: ElementDragKind::Translate,
+            original: original.clone(),
+            accumulated: Vec2::ZERO,
+        };
+
+        let (_, first) = drag.advance(Vec2::new(3.0, -2.0));
+        let (returned_original, second) = drag.advance(Vec2::new(4.0, -5.0));
+
+        assert_eq!(first, Vec2::new(3.0, -2.0));
+        assert_eq!(second, Vec2::new(7.0, -7.0));
+        assert_eq!(returned_original, original);
     }
 
     #[test]
