@@ -637,7 +637,7 @@ impl StudioApp {
                     painter.rect_stroke(
                         page_rect.expand(bleed),
                         CornerRadius::same(2),
-                        Stroke::new(1.0, Color32::from_rgb(151, 77, 54)),
+                        Stroke::new(1.0_f32, Color32::from_rgb(151, 77, 54)),
                         StrokeKind::Outside,
                     );
                 }
@@ -923,7 +923,7 @@ fn paint_element(
             painter.rect_stroke(
                 rect,
                 CornerRadius::same(1),
-                Stroke::new(1.5, ORANGE),
+                Stroke::new(1.5_f32, ORANGE),
                 StrokeKind::Outside,
             );
         }
@@ -952,7 +952,7 @@ fn paint_element(
         painter.rect_stroke(
             rect,
             CornerRadius::same(2),
-            Stroke::new(2.0, ORANGE),
+            Stroke::new(2.0_f32, ORANGE),
             StrokeKind::Outside,
         );
         let handle = Rect::from_center_size(rect.right_top(), Vec2::splat(12.0));
@@ -1022,16 +1022,16 @@ fn paint_placeholder(painter: &egui::Painter, rect: Rect, title: &str, detail: &
     painter.rect_stroke(
         rect,
         CornerRadius::same(2),
-        Stroke::new(1.0, Color32::from_rgb(165, 170, 168)),
+        Stroke::new(1.0_f32, Color32::from_rgb(165, 170, 168)),
         StrokeKind::Inside,
     );
     painter.line_segment(
         [rect.left_top(), rect.right_bottom()],
-        Stroke::new(1.0, Color32::from_rgb(190, 194, 191)),
+        Stroke::new(1.0_f32, Color32::from_rgb(190, 194, 191)),
     );
     painter.line_segment(
         [rect.right_top(), rect.left_bottom()],
-        Stroke::new(1.0, Color32::from_rgb(190, 194, 191)),
+        Stroke::new(1.0_f32, Color32::from_rgb(190, 194, 191)),
     );
     painter.text(
         rect.center() - Vec2::new(0.0, 8.0),
@@ -1112,7 +1112,7 @@ fn paint_grid(painter: &egui::Painter, page: Rect, width: f32, height: f32, scal
                 Pos2::new(screen_x, page.top()),
                 Pos2::new(screen_x, page.bottom()),
             ],
-            Stroke::new(0.5, color),
+            Stroke::new(0.5_f32, color),
         );
         x += 18.0;
     }
@@ -1124,7 +1124,7 @@ fn paint_grid(painter: &egui::Painter, page: Rect, width: f32, height: f32, scal
                 Pos2::new(page.left(), screen_y),
                 Pos2::new(page.right(), screen_y),
             ],
-            Stroke::new(0.5, color),
+            Stroke::new(0.5_f32, color),
         );
         y += 18.0;
     }
