@@ -476,24 +476,81 @@ pub enum FlowOverflow {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TableElement {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub position: Option<Bounds>,
     pub source: String,
     #[serde(default)]
     pub header: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font: Option<String>,
+    #[serde(default = "default_table_font_size")]
+    pub font_size: Length,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_height: Option<Length>,
+    #[serde(default = "default_color")]
+    pub color: String,
+    #[serde(default = "default_table_header_font_style")]
+    pub header_font_style: FontStyle,
+    #[serde(default = "default_table_padding")]
+    pub cell_padding: Length,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub border: Option<Stroke>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub header_background: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub row_background: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alternate_row_background: Option<String>,
     pub columns: Vec<TableColumn>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TableColumn {
     pub field: String,
     pub header: String,
-    pub width: f32,
+    pub width: TableColumnWidth,
     #[serde(default)]
     pub align: TextAlign,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub format: Option<String>,
+    pub format: Option<TableValueFormat>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum TableColumnWidth {
+    Fixed { value: Length },
+    Percent { value: f32 },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum TableValueFormat {
+    Number {
+        #[serde(default = "default_table_decimals")]
+        decimals: u8,
+    },
+    Currency {
+        symbol: String,
+        #[serde(default = "default_table_decimals")]
+        decimals: u8,
+    },
+    Date {
+        #[serde(default)]
+        style: TableDateStyle,
+    },
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TableDateStyle {
+    #[default]
+    Iso,
+    Us,
+    European,
+    Long,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -525,9 +582,25 @@ const fn default_orphans() -> usize {
     1
 }
 
+const fn default_table_font_size() -> Length {
+    Length::points(9.0)
+}
+
+const fn default_table_padding() -> Length {
+    Length::points(4.0)
+}
+
+const fn default_table_decimals() -> u8 {
+    2
+}
+
+const fn default_table_header_font_style() -> FontStyle {
+    FontStyle::Bold
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Color, Element, FlowOverflow, Length, Template};
+    use super::{Color, Element, FlowOverflow, FontStyle, Length, TableColumnWidth, Template};
 
     #[test]
     fn converts_supported_units_to_points() {
@@ -583,5 +656,52 @@ mod tests {
         assert_eq!(stack.overflow, FlowOverflow::Paginate);
         assert!(!stack.keep_together);
         assert_eq!(stack.orphans, 1);
+    }
+
+    #[test]
+    fn table_schema_supports_explicit_widths_and_rejects_arbitrary_layout() {
+        let valid: Template = serde_json::from_str(
+            r#"{
+              "name": "Table",
+              "document": {
+                "width": { "value": 200, "unit": "points" },
+                "height": { "value": 200, "unit": "points" }
+              },
+              "pages": [{ "elements": [{
+                "type": "table",
+                "position": {
+                  "x": { "value": 10, "unit": "points" },
+                  "y": { "value": 10, "unit": "points" },
+                  "width": { "value": 180, "unit": "points" },
+                  "height": { "value": 180, "unit": "points" }
+                },
+                "source": "items",
+                "columns": [{
+                  "field": "name",
+                  "header": "Name",
+                  "width": {
+                    "type": "fixed",
+                    "value": { "value": 180, "unit": "points" }
+                  }
+                }]
+              }] }]
+            }"#,
+        )
+        .unwrap();
+        let Element::Table(table) = &valid.pages[0].elements[0] else {
+            panic!("expected table");
+        };
+        assert_eq!(table.header_font_style, FontStyle::Bold);
+        assert_eq!(table.cell_padding, Length::points(4.0));
+        assert!(matches!(
+            table.columns[0].width,
+            TableColumnWidth::Fixed { .. }
+        ));
+
+        let unsupported = serde_json::to_value(&valid).unwrap();
+        let mut unsupported = unsupported;
+        unsupported["pages"][0]["elements"][0]["merged_cells"] = serde_json::json!([]);
+        let error = serde_json::from_value::<Template>(unsupported).unwrap_err();
+        assert!(error.to_string().contains("unknown field `merged_cells`"));
     }
 }

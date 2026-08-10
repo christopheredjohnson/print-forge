@@ -1,0 +1,47 @@
+[
+  {
+    "invoice_number": "INV-2026-0042",
+    "customer": {
+      "name": "Northwind Press"
+    },
+    "issued_date": "March 31, 2026",
+    "items": [
+      { "description": "Premium matte cover stock with custom grain direction setup", "quantity": 4, "service_date": "2026-03-01", "unit_price": 42.5, "total": 170.0 },
+      { "description": "Variable-data merge and production preflight for membership cards", "quantity": 1, "service_date": "2026-03-02", "unit_price": 325.0, "total": 325.0 },
+      { "description": "Two-sided color proof with calibrated contract output", "quantity": 3, "service_date": "2026-03-03", "unit_price": 28.75, "total": 86.25 },
+      { "description": "Die-cut label sheets on weather-resistant synthetic material", "quantity": 12, "service_date": "2026-03-04", "unit_price": 18.4, "total": 220.8 },
+      { "description": "Address normalization and postal barcode preparation", "quantity": 1, "service_date": "2026-03-05", "unit_price": 145.0, "total": 145.0 },
+      { "description": "Short-run product catalog with saddle-stitch finishing", "quantity": 250, "service_date": "2026-03-06", "unit_price": 3.85, "total": 962.5 },
+      { "description": "Custom spot-color matching and press-side adjustment", "quantity": 2, "service_date": "2026-03-07", "unit_price": 95.0, "total": 190.0 },
+      { "description": "Sequential numbering for serialized event credentials", "quantity": 500, "service_date": "2026-03-08", "unit_price": 0.42, "total": 210.0 },
+      { "description": "Large-format window graphic output and contour trimming", "quantity": 6, "service_date": "2026-03-09", "unit_price": 67.5, "total": 405.0 },
+      { "description": "Folded instruction leaflets with multilingual variable copy", "quantity": 800, "service_date": "2026-03-10", "unit_price": 0.31, "total": 248.0 },
+      { "description": "Barcode verification report and sample scan documentation", "quantity": 1, "service_date": "2026-03-11", "unit_price": 185.0, "total": 185.0 },
+      { "description": "Embossed presentation folders with reinforced business-card slots", "quantity": 100, "service_date": "2026-03-12", "unit_price": 6.25, "total": 625.0 },
+      { "description": "Color-managed image correction for supplied product photography", "quantity": 18, "service_date": "2026-03-13", "unit_price": 22.0, "total": 396.0 },
+      { "description": "Foil-stamped invitation suite with matching response envelopes", "quantity": 75, "service_date": "2026-03-14", "unit_price": 8.4, "total": 630.0 },
+      { "description": "Database deduplication and household-level suppression pass", "quantity": 1, "service_date": "2026-03-15", "unit_price": 275.0, "total": 275.0 },
+      { "description": "Booklet imposition and creep compensation for a forty-page guide", "quantity": 400, "service_date": "2026-03-16", "unit_price": 2.15, "total": 860.0 },
+      { "description": "Perforated reply card inserts with unique tracking identifiers", "quantity": 600, "service_date": "2026-03-17", "unit_price": 0.38, "total": 228.0 },
+      { "description": "Protective aqueous coating for high-contact counter cards", "quantity": 120, "service_date": "2026-03-18", "unit_price": 1.1, "total": 132.0 },
+      { "description": "Custom carton labels with lot number and expiration date merge", "quantity": 900, "service_date": "2026-03-19", "unit_price": 0.27, "total": 243.0 },
+      { "description": "Press-ready PDF/X conversion for legacy campaign artwork", "quantity": 14, "service_date": "2026-03-20", "unit_price": 35.0, "total": 490.0 },
+      { "description": "Kitting and sequence-aware collation for regional sales packets", "quantity": 220, "service_date": "2026-03-21", "unit_price": 1.75, "total": 385.0 },
+      { "description": "Final quality audit with packaged production sample archive", "quantity": 1, "service_date": "2026-03-22", "unit_price": 195.0, "total": 195.0 },
+      { "description": "Regional versioning for dealer-specific promotional inserts", "quantity": 16, "service_date": "2026-04-01", "unit_price": 48.0, "total": 768.0 },
+      { "description": "Soft-touch laminate applied to presentation booklet covers", "quantity": 300, "service_date": "2026-04-02", "unit_price": 0.85, "total": 255.0 },
+      { "description": "Variable coupon codes with redemption file reconciliation", "quantity": 750, "service_date": "2026-04-03", "unit_price": 0.29, "total": 217.5 },
+      { "description": "Retail shelf strips with store-level assortment messaging", "quantity": 420, "service_date": "2026-04-04", "unit_price": 0.74, "total": 310.8 },
+      { "description": "Manual review of low-resolution artwork and replacement log", "quantity": 1, "service_date": "2026-04-05", "unit_price": 165.0, "total": 165.0 },
+      { "description": "Custom envelope converting with secure peel-and-seal closure", "quantity": 1000, "service_date": "2026-04-06", "unit_price": 0.46, "total": 460.0 },
+      { "description": "Personalized donor letters with household salutation rules", "quantity": 1250, "service_date": "2026-04-07", "unit_price": 0.33, "total": 412.5 },
+      { "description": "Warehouse pallet labels on freezer-grade adhesive stock", "quantity": 360, "service_date": "2026-04-08", "unit_price": 0.92, "total": 331.2 },
+      { "description": "Mounted event signage with matte glare-resistant overlaminate", "quantity": 24, "service_date": "2026-04-09", "unit_price": 31.5, "total": 756.0 },
+      { "description": "Automated production report with rejected-record appendix", "quantity": 1, "service_date": "2026-04-10", "unit_price": 120.0, "total": 120.0 },
+      { "description": "Unique registration badges sorted by attendee check-in lane", "quantity": 640, "service_date": "2026-04-11", "unit_price": 0.68, "total": 435.2 },
+      { "description": "Recycled kraft hang tags with drilled holes and cotton cord", "quantity": 500, "service_date": "2026-04-12", "unit_price": 0.88, "total": 440.0 },
+      { "description": "Multi-piece fulfillment with address-matched response cards", "quantity": 900, "service_date": "2026-04-13", "unit_price": 1.22, "total": 1098.0 },
+      { "description": "Production closeout and encrypted data-retention certificate", "quantity": 1, "service_date": "2026-04-14", "unit_price": 210.0, "total": 210.0 }
+    ]
+  }
+]

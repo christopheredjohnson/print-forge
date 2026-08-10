@@ -8,7 +8,8 @@ use std::{
 
 use print_forge_template::{
     Color, DashStyle, DocumentMetadata, Element, FlowOverflow, FontFamily, FontStyle, ImageFit,
-    StackDirection, StackElement, Stroke, Template, TextAlign, TextOverflow,
+    StackDirection, StackElement, Stroke, TableColumnWidth, TableDateStyle, TableElement,
+    TableValueFormat, Template, TextAlign, TextOverflow,
 };
 use thiserror::Error;
 
@@ -225,6 +226,22 @@ fn layout_template_page(
                 let flow_pages = layout_flow_stack(stack, &source_path, template, data, options)
                     .map_err(|source| layout_error(page_index, &source_path, source))?;
                 for (continuation, commands) in flow_pages.into_iter().enumerate() {
+                    if continuation > 0 {
+                        pages.push(ResolvedPage {
+                            commands: repeating.clone(),
+                        });
+                    }
+                    pages
+                        .last_mut()
+                        .expect("page exists")
+                        .commands
+                        .extend(commands);
+                }
+            }
+            Element::Table(table) => {
+                let table_pages = layout_table(table, &source_path, template, data, options)
+                    .map_err(|source| layout_error(page_index, &source_path, source))?;
+                for (continuation, commands) in table_pages.into_iter().enumerate() {
                     if continuation > 0 {
                         pages.push(ResolvedPage {
                             commands: repeating.clone(),
@@ -537,6 +554,567 @@ fn layout_stack_in_bounds(
     Ok(commands)
 }
 
+fn layout_table(
+    table: &TableElement,
+    source_path: &str,
+    template: &Template,
+    data: &DataRow,
+    options: &LayoutOptions,
+) -> Result<Vec<Vec<ResolvedCommand>>, ElementLayoutError> {
+    let bounds = table
+        .position
+        .as_ref()
+        .map(resolve_bounds)
+        .ok_or_else(|| missing_position("table"))?;
+    validate_flow_rect(bounds, "table bounds")?;
+    if table.columns.is_empty() {
+        return Err(ElementLayoutError::InvalidLayout(
+            "table must define at least one column".to_owned(),
+        ));
+    }
+
+    let source = lookup_value(data, &table.source)
+        .ok_or_else(|| ElementLayoutError::MissingVariable(table.source.clone()))?;
+    let rows = source.as_array().ok_or_else(|| {
+        ElementLayoutError::InvalidLayout(format!(
+            "table source {:?} must resolve to an array",
+            table.source
+        ))
+    })?;
+    let column_widths = resolve_table_column_widths(table, bounds.width)?;
+    let padding = table.cell_padding.to_points();
+    if !padding.is_finite() || padding < 0.0 {
+        return Err(ElementLayoutError::InvalidLayout(
+            "table cell padding must be nonnegative and finite".to_owned(),
+        ));
+    }
+    for (index, width) in column_widths.iter().enumerate() {
+        if width - padding * 2.0 <= 0.0 {
+            return Err(ElementLayoutError::InvalidLayout(format!(
+                "table column {index} is too narrow for {:.2}pt cell padding",
+                padding
+            )));
+        }
+    }
+
+    let font_size = table.font_size.to_points();
+    let line_height = table
+        .line_height
+        .map_or(font_size * 1.2, |value| value.to_points());
+    if !font_size.is_finite() || font_size <= 0.0 || !line_height.is_finite() || line_height <= 0.0
+    {
+        return Err(ElementLayoutError::InvalidLayout(
+            "table font size and line height must be positive and finite".to_owned(),
+        ));
+    }
+    let body_font = resolve_font(template, table.font.as_deref(), FontStyle::Regular, options)?;
+    let header_font = resolve_font(
+        template,
+        table.font.as_deref(),
+        table.header_font_style,
+        options,
+    )?;
+    let body_metrics = FontMetrics::load(&body_font)?;
+    let header_metrics = FontMetrics::load(&header_font)?;
+    let text_color = resolve_color(&table.color)?;
+    let header_background = table
+        .header_background
+        .as_deref()
+        .map(resolve_color)
+        .transpose()?;
+    let row_background = table
+        .row_background
+        .as_deref()
+        .map(resolve_color)
+        .transpose()?;
+    let alternate_background = table
+        .alternate_row_background
+        .as_deref()
+        .map(resolve_color)
+        .transpose()?;
+    let border = table.border.as_ref().map(resolve_stroke).transpose()?;
+
+    let formatted_rows = rows
+        .iter()
+        .enumerate()
+        .map(|(row_index, value)| {
+            let object = value.as_object().ok_or_else(|| {
+                ElementLayoutError::InvalidLayout(format!(
+                    "table source {:?} row {row_index} must be an object",
+                    table.source
+                ))
+            })?;
+            table
+                .columns
+                .iter()
+                .enumerate()
+                .map(|(column_index, column)| {
+                    let value = lookup_table_cell(object, &column.field).ok_or_else(|| {
+                        ElementLayoutError::InvalidLayout(format!(
+                            "table row {row_index}, column {column_index} is missing field {:?}",
+                            column.field
+                        ))
+                    })?;
+                    format_table_value(value, column.format.as_ref()).map_err(|message| {
+                        ElementLayoutError::InvalidLayout(format!(
+                            "table row {row_index}, column {column_index}: {message}"
+                        ))
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let header_values = table
+        .columns
+        .iter()
+        .map(|column| column.header.clone())
+        .collect::<Vec<_>>();
+    let header_height = table.header.then(|| {
+        measure_table_row(
+            &header_values,
+            &column_widths,
+            padding,
+            font_size,
+            line_height,
+            &header_metrics,
+        )
+    });
+    let row_heights = formatted_rows
+        .iter()
+        .map(|values| {
+            measure_table_row(
+                values,
+                &column_widths,
+                padding,
+                font_size,
+                line_height,
+                &body_metrics,
+            )
+        })
+        .collect::<Vec<_>>();
+
+    let mut pages = Vec::new();
+    let mut row_index = 0_usize;
+    let mut first_page = true;
+    while first_page || row_index < formatted_rows.len() {
+        first_page = false;
+        let page_index = pages.len();
+        let page_top = bounds.y + bounds.height;
+        let mut cursor_top = page_top;
+        let mut boundaries = vec![page_top];
+        let mut commands = Vec::new();
+
+        if let Some(header_height) = header_height {
+            if header_height > bounds.height + 0.01 {
+                return Err(ElementLayoutError::InvalidLayout(format!(
+                    "table header measures {header_height:.2}pt but the table region is only {:.2}pt high",
+                    bounds.height
+                )));
+            }
+            let row_bottom = cursor_top - header_height;
+            append_table_row(
+                &mut commands,
+                &header_values,
+                table,
+                &column_widths,
+                bounds.x,
+                row_bottom,
+                header_height,
+                padding,
+                font_size,
+                line_height,
+                &header_metrics,
+                &header_font,
+                text_color,
+                header_background,
+                &format!("{source_path}.pages[{page_index}].header"),
+            )?;
+            cursor_top = row_bottom;
+            boundaries.push(cursor_top);
+        }
+
+        let first_row_on_page = row_index;
+        while row_index < formatted_rows.len() {
+            let row_height = row_heights[row_index];
+            if cursor_top - row_height < bounds.y - 0.01 {
+                break;
+            }
+            let row_bottom = cursor_top - row_height;
+            let background = if row_index % 2 == 1 {
+                alternate_background.or(row_background)
+            } else {
+                row_background
+            };
+            append_table_row(
+                &mut commands,
+                &formatted_rows[row_index],
+                table,
+                &column_widths,
+                bounds.x,
+                row_bottom,
+                row_height,
+                padding,
+                font_size,
+                line_height,
+                &body_metrics,
+                &body_font,
+                text_color,
+                background,
+                &format!("{source_path}.rows[{row_index}]"),
+            )?;
+            cursor_top = row_bottom;
+            boundaries.push(cursor_top);
+            row_index += 1;
+        }
+
+        if row_index == first_row_on_page && row_index < formatted_rows.len() {
+            return Err(ElementLayoutError::InvalidLayout(format!(
+                "table row {row_index} measures {:.2}pt and cannot fit with the repeated header in the {:.2}pt table region",
+                row_heights[row_index], bounds.height
+            )));
+        }
+
+        if let Some(border) = &border
+            && boundaries.len() > 1
+        {
+            append_table_grid(
+                &mut commands,
+                bounds.x,
+                page_top,
+                cursor_top,
+                &boundaries,
+                &column_widths,
+                border,
+                &format!("{source_path}.pages[{page_index}].grid"),
+            );
+        }
+        pages.push(commands);
+    }
+
+    Ok(pages)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn append_table_row(
+    commands: &mut Vec<ResolvedCommand>,
+    values: &[String],
+    table: &TableElement,
+    column_widths: &[f32],
+    table_x: f32,
+    row_bottom: f32,
+    row_height: f32,
+    padding: f32,
+    font_size: f32,
+    line_height: f32,
+    metrics: &FontMetrics,
+    font: &ResolvedFont,
+    text_color: Color,
+    background: Option<Color>,
+    source_path: &str,
+) -> Result<(), ElementLayoutError> {
+    let table_width = column_widths.iter().sum();
+    if let Some(fill) = background {
+        commands.push(ResolvedCommand {
+            source_path: format!("{source_path}.background"),
+            command: DrawCommand::Rectangle(RectangleCommand {
+                bounds: Rect {
+                    x: table_x,
+                    y: row_bottom,
+                    width: table_width,
+                    height: row_height,
+                },
+                fill: Some(fill),
+                stroke: None,
+            }),
+        });
+    }
+
+    let mut cell_x = table_x;
+    for (column_index, ((value, column), width)) in values
+        .iter()
+        .zip(&table.columns)
+        .zip(column_widths)
+        .enumerate()
+    {
+        let bounds = Rect {
+            x: cell_x + padding,
+            y: row_bottom + padding,
+            width: width - padding * 2.0,
+            height: row_height - padding * 2.0,
+        };
+        let laid_out = layout_text(
+            value,
+            TextLayoutSpec {
+                bounds,
+                requested_font_size: font_size,
+                requested_line_height: line_height,
+                min_font_size: font_size,
+                align: column.align,
+                overflow: TextOverflow::Error,
+            },
+            metrics,
+        )?;
+        commands.push(ResolvedCommand {
+            source_path: format!("{source_path}.cells[{column_index}]"),
+            command: DrawCommand::Text(TextCommand {
+                bounds,
+                lines: laid_out.lines,
+                font_size_pt: laid_out.font_size_pt,
+                line_height_pt: laid_out.line_height_pt,
+                font: font.clone(),
+                color: text_color,
+                clip: false,
+            }),
+        });
+        cell_x += width;
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn append_table_grid(
+    commands: &mut Vec<ResolvedCommand>,
+    table_x: f32,
+    top: f32,
+    bottom: f32,
+    horizontal_boundaries: &[f32],
+    column_widths: &[f32],
+    border: &StrokeCommand,
+    source_path: &str,
+) {
+    let table_width: f32 = column_widths.iter().sum();
+    for (index, y) in horizontal_boundaries.iter().enumerate() {
+        commands.push(ResolvedCommand {
+            source_path: format!("{source_path}.horizontal[{index}]"),
+            command: DrawCommand::Line(LineCommand {
+                start: Point { x: table_x, y: *y },
+                end: Point {
+                    x: table_x + table_width,
+                    y: *y,
+                },
+                width_pt: border.width_pt,
+                color: border.color,
+                dash: border.dash,
+            }),
+        });
+    }
+
+    let mut x = table_x;
+    for index in 0..=column_widths.len() {
+        commands.push(ResolvedCommand {
+            source_path: format!("{source_path}.vertical[{index}]"),
+            command: DrawCommand::Line(LineCommand {
+                start: Point { x, y: top },
+                end: Point { x, y: bottom },
+                width_pt: border.width_pt,
+                color: border.color,
+                dash: border.dash,
+            }),
+        });
+        if let Some(width) = column_widths.get(index) {
+            x += width;
+        }
+    }
+}
+
+fn measure_table_row(
+    values: &[String],
+    column_widths: &[f32],
+    padding: f32,
+    font_size: f32,
+    line_height: f32,
+    metrics: &FontMetrics,
+) -> f32 {
+    values
+        .iter()
+        .zip(column_widths)
+        .map(|(value, width)| {
+            let lines = wrap_text(value, width - padding * 2.0, font_size, metrics);
+            lines.len() as f32 * line_height + padding * 2.0
+        })
+        .fold(line_height + padding * 2.0, f32::max)
+}
+
+fn resolve_table_column_widths(
+    table: &TableElement,
+    table_width: f32,
+) -> Result<Vec<f32>, ElementLayoutError> {
+    let widths = table
+        .columns
+        .iter()
+        .enumerate()
+        .map(|(index, column)| {
+            let width = match column.width {
+                TableColumnWidth::Fixed { value } => value.to_points(),
+                TableColumnWidth::Percent { value } => table_width * value / 100.0,
+            };
+            if !width.is_finite() || width <= 0.0 {
+                return Err(ElementLayoutError::InvalidLayout(format!(
+                    "table column {index} resolves to an invalid width"
+                )));
+            }
+            Ok(width)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let resolved: f32 = widths.iter().sum();
+    if (resolved - table_width).abs() > 0.1 {
+        return Err(ElementLayoutError::InvalidLayout(format!(
+            "resolved table columns total {resolved:.2}pt but the table is {table_width:.2}pt wide"
+        )));
+    }
+    Ok(widths)
+}
+
+fn lookup_table_cell<'a>(
+    object: &'a serde_json::Map<String, serde_json::Value>,
+    path: &str,
+) -> Option<&'a serde_json::Value> {
+    let mut segments = path.split('.');
+    let mut value = object.get(segments.next()?)?;
+    for segment in segments {
+        value = value.get(segment)?;
+    }
+    Some(value)
+}
+
+fn format_table_value(
+    value: &serde_json::Value,
+    format: Option<&TableValueFormat>,
+) -> Result<String, String> {
+    if value.is_array() || value.is_object() {
+        return Err(
+            "table cells must be scalar values; nested tables and arbitrary cell layouts are not supported"
+                .to_owned(),
+        );
+    }
+    let Some(format) = format else {
+        return Ok(match value {
+            serde_json::Value::Null => String::new(),
+            serde_json::Value::String(value) => value.clone(),
+            _ => value.to_string(),
+        });
+    };
+
+    match format {
+        TableValueFormat::Number { decimals } => {
+            if *decimals > 12 {
+                return Err("number formats support at most 12 decimal places".to_owned());
+            }
+            let number = table_number(value)?;
+            Ok(format_number(number, *decimals))
+        }
+        TableValueFormat::Currency { symbol, decimals } => {
+            if symbol.trim().is_empty() {
+                return Err("currency symbol cannot be empty".to_owned());
+            }
+            if *decimals > 12 {
+                return Err("currency formats support at most 12 decimal places".to_owned());
+            }
+            let number = table_number(value)?;
+            let formatted = format_number(number, *decimals);
+            Ok(if let Some(unsigned) = formatted.strip_prefix('-') {
+                format!("-{symbol}{unsigned}")
+            } else {
+                format!("{symbol}{formatted}")
+            })
+        }
+        TableValueFormat::Date { style } => {
+            let value = value
+                .as_str()
+                .ok_or_else(|| "date format requires a YYYY-MM-DD string".to_owned())?;
+            let (year, month, day) = parse_table_date(value)
+                .ok_or_else(|| "date format requires a valid YYYY-MM-DD date".to_owned())?;
+            Ok(match style {
+                TableDateStyle::Iso => format!("{year:04}-{month:02}-{day:02}"),
+                TableDateStyle::Us => format!("{month:02}/{day:02}/{year:04}"),
+                TableDateStyle::European => format!("{day:02}/{month:02}/{year:04}"),
+                TableDateStyle::Long => format!(
+                    "{} {day}, {year:04}",
+                    month_name(month).expect("validated month")
+                ),
+            })
+        }
+    }
+}
+
+fn table_number(value: &serde_json::Value) -> Result<f64, String> {
+    let number = value
+        .as_f64()
+        .or_else(|| value.as_str().and_then(|value| value.parse::<f64>().ok()));
+    number
+        .filter(|number| number.is_finite())
+        .ok_or_else(|| "number and currency formats require a finite numeric value".to_owned())
+}
+
+fn format_number(value: f64, decimals: u8) -> String {
+    let precision = usize::from(decimals);
+    let unsigned = format!("{:.*}", precision, value.abs());
+    let (integer, fraction) = unsigned
+        .split_once('.')
+        .map_or((unsigned.as_str(), None), |(integer, fraction)| {
+            (integer, Some(fraction))
+        });
+    let reversed = integer.chars().rev().collect::<Vec<_>>();
+    let grouped = reversed
+        .chunks(3)
+        .map(|chunk| chunk.iter().collect::<String>())
+        .collect::<Vec<_>>()
+        .join(",")
+        .chars()
+        .rev()
+        .collect::<String>();
+    let formatted = fraction.map_or(grouped.clone(), |fraction| format!("{grouped}.{fraction}"));
+    if value.is_sign_negative() {
+        format!("-{formatted}")
+    } else {
+        formatted
+    }
+}
+
+fn parse_table_date(value: &str) -> Option<(i32, u32, u32)> {
+    let parts = value.split('-').collect::<Vec<_>>();
+    let [year, month, day] = parts.as_slice() else {
+        return None;
+    };
+    if year.len() != 4 || month.len() != 2 || day.len() != 2 {
+        return None;
+    }
+    let year = year.parse::<i32>().ok()?;
+    let month = month.parse::<u32>().ok()?;
+    let day = day.parse::<u32>().ok()?;
+    let max_day = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if is_table_leap_year(year) => 29,
+        2 => 28,
+        _ => return None,
+    };
+    (1..=max_day).contains(&day).then_some((year, month, day))
+}
+
+const fn is_table_leap_year(year: i32) -> bool {
+    year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)
+}
+
+const fn month_name(month: u32) -> Option<&'static str> {
+    match month {
+        1 => Some("January"),
+        2 => Some("February"),
+        3 => Some("March"),
+        4 => Some("April"),
+        5 => Some("May"),
+        6 => Some("June"),
+        7 => Some("July"),
+        8 => Some("August"),
+        9 => Some("September"),
+        10 => Some("October"),
+        11 => Some("November"),
+        12 => Some("December"),
+        _ => None,
+    }
+}
+
 fn measure_element(
     element: &Element,
     constraints: MeasureConstraints,
@@ -597,7 +1175,9 @@ fn measure_element(
         )),
         Element::QrCode(_) => Err(ElementLayoutError::UnsupportedElement("qr_code")),
         Element::Group(_) => Err(ElementLayoutError::UnsupportedElement("group")),
-        Element::Table(_) => Err(ElementLayoutError::UnsupportedElement("table")),
+        Element::Table(_) => Err(ElementLayoutError::InvalidLayout(
+            "MVP tables must be positioned top-level page elements".to_owned(),
+        )),
         Element::Repeater(_) => Err(ElementLayoutError::UnsupportedElement("repeater")),
         Element::PageBreak => Err(ElementLayoutError::InvalidLayout(
             "page breaks cannot be measured as flow items".to_owned(),
@@ -888,7 +1468,9 @@ fn layout_element_at(
         Element::Stack(_) => Err(ElementLayoutError::InvalidLayout(
             "stack elements must be laid out through the flow layout contract".to_owned(),
         )),
-        Element::Table(_) => Err(ElementLayoutError::UnsupportedElement("table")),
+        Element::Table(_) => Err(ElementLayoutError::InvalidLayout(
+            "MVP tables must be positioned top-level page elements".to_owned(),
+        )),
         Element::Repeater(_) => Err(ElementLayoutError::UnsupportedElement("repeater")),
         Element::PageBreak => Err(ElementLayoutError::InvalidLayout(
             "page breaks are only valid between flow items".to_owned(),
@@ -1323,12 +1905,14 @@ mod tests {
     use std::path::PathBuf;
 
     use print_forge_dataset::DataRow;
-    use print_forge_template::{Element, FlowOverflow, Template, TextAlign, TextOverflow};
+    use print_forge_template::{
+        Element, FlowOverflow, TableDateStyle, TableValueFormat, Template, TextAlign, TextOverflow,
+    };
     use serde_json::json;
 
     use super::{
         BasicLayoutEngine, DrawCommand, ElementLayoutError, FontMetrics, LayoutEngine, LayoutError,
-        LayoutOptions, Rect, TextLayoutSpec, layout_text,
+        LayoutOptions, Rect, TextLayoutSpec, format_table_value, layout_text,
     };
 
     const TEMPLATE: &str = r##"
@@ -1766,5 +2350,168 @@ mod tests {
                 .to_string()
                 .contains("overflow is set to error")
         );
+    }
+
+    #[test]
+    fn formats_table_numbers_currency_and_dates() {
+        assert_eq!(
+            format_table_value(
+                &json!(-1234.5),
+                Some(&TableValueFormat::Currency {
+                    symbol: "$".to_owned(),
+                    decimals: 2,
+                })
+            )
+            .unwrap(),
+            "-$1,234.50"
+        );
+        assert_eq!(
+            format_table_value(
+                &json!(12345.678),
+                Some(&TableValueFormat::Number { decimals: 1 })
+            )
+            .unwrap(),
+            "12,345.7"
+        );
+        assert_eq!(
+            format_table_value(
+                &json!("2024-02-29"),
+                Some(&TableValueFormat::Date {
+                    style: TableDateStyle::Long,
+                })
+            )
+            .unwrap(),
+            "February 29, 2024"
+        );
+        assert!(format_table_value(&json!([1, 2]), None).is_err());
+        assert!(
+            format_table_value(&json!(1), Some(&TableValueFormat::Number { decimals: 13 }))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn measures_and_paginates_table_rows_with_repeated_headers() {
+        let template: Template = serde_json::from_str(
+            r##"{
+              "name": "Paginated table",
+              "document": {
+                "width": { "value": 240, "unit": "points" },
+                "height": { "value": 200, "unit": "points" }
+              },
+              "pages": [{
+                "header": [{
+                  "type": "text",
+                  "position": {
+                    "x": { "value": 20, "unit": "points" },
+                    "y": { "value": 180, "unit": "points" },
+                    "width": { "value": 200, "unit": "points" },
+                    "height": { "value": 12, "unit": "points" }
+                  },
+                  "value": "Repeated page header",
+                  "font_size": { "value": 9, "unit": "points" }
+                }],
+                "elements": [{
+                  "type": "table",
+                  "position": {
+                    "x": { "value": 20, "unit": "points" },
+                    "y": { "value": 30, "unit": "points" },
+                    "width": { "value": 200, "unit": "points" },
+                    "height": { "value": 130, "unit": "points" }
+                  },
+                  "source": "items",
+                  "header": true,
+                  "font_size": { "value": 9, "unit": "points" },
+                  "line_height": { "value": 11, "unit": "points" },
+                  "cell_padding": { "value": 4, "unit": "points" },
+                  "header_background": "#DDDDDD",
+                  "alternate_row_background": "#F5F5F5",
+                  "border": {
+                    "width": { "value": 0.5, "unit": "points" },
+                    "color": "#333333"
+                  },
+                  "columns": [
+                    {
+                      "field": "description",
+                      "header": "Description",
+                      "width": {
+                        "type": "fixed",
+                        "value": { "value": 60, "unit": "points" }
+                      }
+                    },
+                    {
+                      "field": "amount",
+                      "header": "Amount",
+                      "width": { "type": "percent", "value": 35 },
+                      "align": "right",
+                      "format": { "type": "currency", "symbol": "$", "decimals": 2 }
+                    },
+                    {
+                      "field": "date",
+                      "header": "Date",
+                      "width": { "type": "percent", "value": 35 },
+                      "align": "center",
+                      "format": { "type": "date", "style": "us" }
+                    }
+                  ]
+                }]
+              }]
+            }"##,
+        )
+        .unwrap();
+        let data: DataRow = serde_json::from_value(json!({
+            "items": [
+                {"description":"A long description that wraps", "amount":1234.5, "date":"2026-01-01"},
+                {"description":"Second", "amount":2, "date":"2026-01-02"},
+                {"description":"Third", "amount":3, "date":"2026-01-03"},
+                {"description":"Fourth", "amount":4, "date":"2026-01-04"},
+                {"description":"Fifth", "amount":5, "date":"2026-01-05"},
+                {"description":"Sixth", "amount":6, "date":"2026-01-06"},
+                {"description":"Seventh", "amount":7, "date":"2026-01-07"}
+            ]
+        }))
+        .unwrap();
+
+        let document = BasicLayoutEngine.layout(&template, &data).unwrap();
+        assert!(document.pages.len() >= 2);
+        assert!(document.pages.iter().all(|page| {
+            page.commands
+                .iter()
+                .any(|command| command.source_path.contains(".header.cells[0]"))
+                && page
+                    .commands
+                    .iter()
+                    .any(|command| command.source_path.contains(".grid.vertical[0]"))
+                && page
+                    .commands
+                    .iter()
+                    .any(|command| command.source_path == "pages[0].header[0]")
+        }));
+
+        let body_cells = document
+            .pages
+            .iter()
+            .flat_map(|page| &page.commands)
+            .filter(|command| {
+                command.source_path.contains(".rows[") && command.source_path.contains(".cells[")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(body_cells.len(), 21);
+        let first_description = body_cells
+            .iter()
+            .find(|command| command.source_path.contains(".rows[0].cells[0]"))
+            .unwrap();
+        let DrawCommand::Text(first_description) = &first_description.command else {
+            panic!("expected table text");
+        };
+        assert!(first_description.lines.len() > 1);
+        let first_amount = body_cells
+            .iter()
+            .find(|command| command.source_path.contains(".rows[0].cells[1]"))
+            .unwrap();
+        let DrawCommand::Text(first_amount) = &first_amount.command else {
+            panic!("expected formatted currency text");
+        };
+        assert_eq!(first_amount.lines[0].value, "$1,234.50");
     }
 }

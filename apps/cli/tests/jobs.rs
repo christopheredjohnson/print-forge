@@ -241,3 +241,26 @@ fn flow_layout_fixture_renders_explicit_and_automatic_continuation_pages() {
     assert_eq!(page_count(&pdf), 3);
     assert!(String::from_utf8_lossy(&output.stdout).contains("3 page(s)"));
 }
+
+#[test]
+fn mvp_table_fixture_wraps_rows_and_paginates() {
+    let directory = TestDir::new("table-job");
+    let examples = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples");
+    let template = examples.join("table-invoice.json");
+    let dataset = examples.join("table-invoice-data.json");
+    let pdf = directory.path().join("table-invoice.pdf");
+    let output = run(&[
+        "render",
+        template.to_str().unwrap(),
+        dataset.to_str().unwrap(),
+        pdf.to_str().unwrap(),
+    ]);
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(page_count(&pdf), 2);
+    assert!(String::from_utf8_lossy(&output.stdout).contains("2 page(s)"));
+}
