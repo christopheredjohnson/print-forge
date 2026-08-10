@@ -56,6 +56,7 @@ pub struct TextCommand {
     pub lines: Vec<TextLine>,
     pub font_size_pt: f32,
     pub line_height_pt: f32,
+    pub align: TextAlign,
     pub font: ResolvedFont,
     pub color: Color,
     pub clip: bool,
@@ -66,6 +67,7 @@ pub struct TextLine {
     pub value: String,
     pub x: f32,
     pub y: f32,
+    pub width_pt: f32,
     pub word_spacing_pt: f32,
 }
 
@@ -1255,6 +1257,7 @@ fn append_table_row(
                 lines: laid_out.lines,
                 font_size_pt: laid_out.font_size_pt,
                 line_height_pt: laid_out.line_height_pt,
+                align: column.align,
                 font: font.clone(),
                 color: text_color,
                 clip: false,
@@ -1818,6 +1821,7 @@ fn layout_element_at(
                 lines: laid_out.lines,
                 font_size_pt: laid_out.font_size_pt,
                 line_height_pt: laid_out.line_height_pt,
+                align: text.align,
                 font,
                 color: resolve_color(&text.color)?,
                 clip: text.overflow == TextOverflow::Clip,
@@ -2123,6 +2127,7 @@ fn layout_text(
                 value: line.value.clone(),
                 x,
                 y: top_baseline - index as f32 * line_height,
+                width_pt: line.width_pt,
                 word_spacing_pt,
             }
         })

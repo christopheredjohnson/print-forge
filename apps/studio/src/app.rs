@@ -4,6 +4,7 @@ use std::{
     ops::Deref,
     path::Path,
     path::PathBuf,
+    sync::Arc,
 };
 
 use eframe::egui::{
@@ -1737,30 +1738,47 @@ fn paint_resolved_page(
                 let font = FontId::proportional((text.font_size_pt * scale).max(1.0));
                 let color = print_color(text.color);
                 for line in &text.lines {
-                    let mut position = page_point(page, scale, line.x, line.y);
+                    let baseline = page_point(page, scale, line.x, line.y);
                     if line.word_spacing_pt.abs() < f32::EPSILON {
-                        paint_rotated_text(
-                            &text_painter,
-                            position,
-                            &line.value,
-                            &font,
-                            color,
-                            transform,
+                        let galley =
+                            text_painter.layout_no_wrap(line.value.clone(), font.clone(), color);
+                        let position = aligned_preview_text_origin(
+                            baseline,
+                            line.width_pt * scale,
+                            galley.size().x,
+                            galley_baseline_offset(&galley),
+                            text.align,
                         );
+                        paint_rotated_galley(&text_painter, position, galley, color, transform);
                         continue;
                     }
-                    for word in line.value.split_inclusive(' ') {
-                        let width = paint_rotated_text(
-                            &text_painter,
-                            position,
-                            word,
-                            &font,
-                            color,
-                            transform,
-                        );
+                    let words = line
+                        .value
+                        .split_inclusive(' ')
+                        .map(|word| {
+                            (
+                                word.ends_with(' '),
+                                text_painter.layout_no_wrap(word.to_owned(), font.clone(), color),
+                            )
+                        })
+                        .collect::<Vec<_>>();
+                    let spaces = words.iter().filter(|(space, _)| *space).count();
+                    let actual_width = words.iter().map(|(_, galley)| galley.size().x).sum::<f32>();
+                    let target_width =
+                        (line.width_pt + line.word_spacing_pt * spaces as f32) * scale;
+                    let preview_word_spacing = if spaces == 0 {
+                        0.0
+                    } else {
+                        (target_width - actual_width) / spaces as f32
+                    };
+                    let mut position = baseline;
+                    for (ends_with_space, galley) in words {
+                        let width = galley.size().x;
+                        let origin = position - Vec2::new(0.0, galley_baseline_offset(&galley));
+                        paint_rotated_galley(&text_painter, origin, galley, color, transform);
                         position.x += width;
-                        if word.ends_with(' ') {
-                            position.x += line.word_spacing_pt * scale;
+                        if ends_with_space {
+                            position.x += preview_word_spacing;
                         }
                     }
                 }
@@ -1923,22 +1941,40 @@ fn command_screen_transform(
     }
 }
 
-fn paint_rotated_text(
-    painter: &egui::Painter,
+fn aligned_preview_text_origin(
     baseline: Pos2,
-    value: &str,
-    font: &FontId,
+    target_width: f32,
+    preview_width: f32,
+    baseline_offset: f32,
+    align: TextAlign,
+) -> Pos2 {
+    let x_offset = match align {
+        TextAlign::Center => (target_width - preview_width) / 2.0,
+        TextAlign::Right => target_width - preview_width,
+        TextAlign::Left | TextAlign::Justify => 0.0,
+    };
+    baseline + Vec2::new(x_offset, -baseline_offset)
+}
+
+fn galley_baseline_offset(galley: &egui::Galley) -> f32 {
+    galley
+        .rows
+        .first()
+        .and_then(|row| row.glyphs.first().map(|glyph| row.pos.y + glyph.pos.y))
+        .unwrap_or_else(|| galley.size().y)
+}
+
+fn paint_rotated_galley(
+    painter: &egui::Painter,
+    top_left: Pos2,
+    galley: Arc<egui::Galley>,
     color: Color32,
     transform: ScreenTransform,
-) -> f32 {
-    let galley = painter.layout_no_wrap(value.to_owned(), font.clone(), color);
-    let width = galley.size().x;
-    let top_left = baseline - Vec2::new(0.0, galley.size().y);
+) {
     painter.add(
         egui::epaint::TextShape::new(transform.point(top_left), galley, color)
             .with_angle(transform.angle),
     );
-    width
 }
 
 fn transformed_rect_points(rect: Rect, transform: ScreenTransform) -> [Pos2; 4] {
@@ -3589,13 +3625,14 @@ mod tests {
 
     use eframe::egui::{Color32, Pos2, Vec2};
     use print_forge_engine::DrawCommand;
-    use print_forge_template::{Color as PrintColor, Element};
+    use print_forge_template::{Color as PrintColor, Element, TextAlign};
 
     use super::{
         EditorGuide, ElementDragKind, ElementDragState, GuideAxis, PersistedState,
-        PreviewErrorCopy, ScreenTransform, alignment_targets, first_template_variable,
-        guide_position_from_pointer, inverse_rotate_vector, parse_color, preview_error_copy,
-        print_color, push_editor_guide, resolve_preview, rgb_hex, safe_stem, serialize_template,
+        PreviewErrorCopy, ScreenTransform, aligned_preview_text_origin, alignment_targets,
+        first_template_variable, guide_position_from_pointer, inverse_rotate_vector, parse_color,
+        preview_error_copy, print_color, push_editor_guide, resolve_preview, rgb_hex, safe_stem,
+        serialize_template,
     };
     use crate::model::{ElementKind, new_element, starter_template};
 
@@ -3610,6 +3647,24 @@ mod tests {
     #[test]
     fn output_names_are_safe() {
         assert_eq!(safe_stem(" ACME / Summer Catalog "), "acme-summer-catalog");
+    }
+
+    #[test]
+    fn preview_text_uses_pdf_alignment_anchor_and_baseline() {
+        let baseline = Pos2::new(100.0, 80.0);
+
+        assert_eq!(
+            aligned_preview_text_origin(baseline, 100.0, 80.0, 15.0, TextAlign::Left),
+            Pos2::new(100.0, 65.0)
+        );
+        assert_eq!(
+            aligned_preview_text_origin(baseline, 100.0, 80.0, 15.0, TextAlign::Center),
+            Pos2::new(110.0, 65.0)
+        );
+        assert_eq!(
+            aligned_preview_text_origin(baseline, 100.0, 80.0, 15.0, TextAlign::Right),
+            Pos2::new(120.0, 65.0)
+        );
     }
 
     #[test]
