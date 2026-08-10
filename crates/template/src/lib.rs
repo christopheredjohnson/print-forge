@@ -328,6 +328,9 @@ pub struct TextElement {
     pub min_font_size: Option<Length>,
     #[serde(default = "default_color")]
     pub color: String,
+    /// Clockwise rotation around the element bounds center, in degrees.
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub rotation: f32,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -366,6 +369,9 @@ pub struct ImageElement {
     pub source: String,
     #[serde(default)]
     pub fit: ImageFit,
+    /// Clockwise rotation around the element bounds center, in degrees.
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub rotation: f32,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -385,6 +391,9 @@ pub struct RectangleElement {
     pub fill: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stroke: Option<Stroke>,
+    /// Clockwise rotation around the element bounds center, in degrees.
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub rotation: f32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -425,6 +434,9 @@ pub struct SvgElement {
     pub source: String,
     #[serde(default)]
     pub fit: ImageFit,
+    /// Clockwise rotation around the element bounds center, in degrees.
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub rotation: f32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -441,6 +453,9 @@ pub struct QrCodeElement {
     pub color: String,
     #[serde(default = "default_background_color")]
     pub background: String,
+    /// Clockwise rotation around the element bounds center, in degrees.
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub rotation: f32,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -467,6 +482,9 @@ pub struct BarcodeElement {
     pub color: String,
     #[serde(default = "default_background_color")]
     pub background: String,
+    /// Clockwise rotation around the element bounds center, in degrees.
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub rotation: f32,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -617,6 +635,10 @@ pub enum RepeatLayout {
 
 fn default_color() -> String {
     "#000000".to_owned()
+}
+
+fn is_zero_f32(value: &f32) -> bool {
+    *value == 0.0
 }
 
 fn default_background_color() -> String {
@@ -813,5 +835,49 @@ mod tests {
         assert_eq!(barcode.format, BarcodeFormat::Code128);
         assert_eq!(barcode.quiet_zone, 10);
         assert_eq!(barcode.color, "#000000");
+    }
+
+    #[test]
+    fn visual_elements_default_rotation_and_serialize_explicit_values() {
+        let template: Template = serde_json::from_str(
+            r##"{
+              "name": "Rotation",
+              "document": {
+                "width": { "value": 100, "unit": "points" },
+                "height": { "value": 100, "unit": "points" }
+              },
+              "pages": [{ "elements": [{
+                "type": "text",
+                "position": {
+                  "x": { "value": 10, "unit": "points" },
+                  "y": { "value": 10, "unit": "points" },
+                  "width": { "value": 80, "unit": "points" },
+                  "height": { "value": 20, "unit": "points" }
+                },
+                "value": "Rotatable",
+                "font_size": { "value": 10, "unit": "points" }
+              }] }]
+            }"##,
+        )
+        .unwrap();
+        let Element::Text(text) = &template.pages[0].elements[0] else {
+            panic!("expected text");
+        };
+        assert_eq!(text.rotation, 0.0);
+        assert!(
+            serde_json::to_value(&template).unwrap()["pages"][0]["elements"][0]
+                .get("rotation")
+                .is_none()
+        );
+
+        let mut rotated = template;
+        let Element::Text(text) = &mut rotated.pages[0].elements[0] else {
+            panic!("expected text");
+        };
+        text.rotation = 22.5;
+        assert_eq!(
+            serde_json::to_value(&rotated).unwrap()["pages"][0]["elements"][0]["rotation"],
+            22.5
+        );
     }
 }

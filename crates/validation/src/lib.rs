@@ -530,6 +530,15 @@ fn validate_element(
     position_context: PositionContext,
     report: &mut ValidationReport,
 ) {
+    if let Some(rotation) = element_rotation(element)
+        && !rotation.is_finite()
+    {
+        report.error(
+            "element.invalid_rotation",
+            format!("{path}.rotation"),
+            "rotation must be a finite number of clockwise degrees",
+        );
+    }
     match element {
         Element::Text(text) => {
             validate_optional_bounds(
@@ -863,6 +872,23 @@ fn validate_element(
             ),
             PositionContext::Absolute | PositionContext::Flow(StackDirection::Vertical) => {}
         },
+    }
+}
+
+fn element_rotation(element: &Element) -> Option<f32> {
+    match element {
+        Element::Text(element) => Some(element.rotation),
+        Element::Image(element) => Some(element.rotation),
+        Element::Rectangle(element) => Some(element.rotation),
+        Element::Svg(element) => Some(element.rotation),
+        Element::QrCode(element) => Some(element.rotation),
+        Element::Barcode(element) => Some(element.rotation),
+        Element::Line(_)
+        | Element::Group(_)
+        | Element::Stack(_)
+        | Element::Table(_)
+        | Element::Repeater(_)
+        | Element::PageBreak => None,
     }
 }
 

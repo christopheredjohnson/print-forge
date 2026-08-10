@@ -22,6 +22,14 @@ pub enum LineEndpoint {
     End,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LayerMove {
+    Back,
+    Backward,
+    Forward,
+    Front,
+}
+
 impl ElementKind {
     pub const ALL: [Self; 7] = [
         Self::Text,
@@ -72,6 +80,7 @@ pub fn starter_template() -> Template {
                 overflow: TextOverflow::Error,
                 min_font_size: None,
                 color: "#20252A".to_owned(),
+                rotation: 0.0,
             })],
         }],
     }
@@ -92,16 +101,19 @@ pub fn new_element(kind: ElementKind, offset: f32) -> Element {
             overflow: TextOverflow::Error,
             min_font_size: None,
             color: "#20252A".to_owned(),
+            rotation: 0.0,
         }),
         ElementKind::Rectangle => Element::Rectangle(RectangleElement {
             position: Some(bounds(x, y, 180.0, 90.0)),
             fill: Some("#F15A24".to_owned()),
             stroke: None,
+            rotation: 0.0,
         }),
         ElementKind::Image => Element::Image(ImageElement {
             position: Some(bounds(x, y, 180.0, 120.0)),
             source: "assets/images/example.png".to_owned(),
             fit: ImageFit::Contain,
+            rotation: 0.0,
         }),
         ElementKind::Line => Element::Line(LineElement {
             x1: Length::points(x),
@@ -116,6 +128,7 @@ pub fn new_element(kind: ElementKind, offset: f32) -> Element {
             position: Some(bounds(x, y, 144.0, 144.0)),
             source: "assets/vectors/example.svg".to_owned(),
             fit: ImageFit::Contain,
+            rotation: 0.0,
         }),
         ElementKind::QrCode => Element::QrCode(QrCodeElement {
             position: Some(bounds(x, y, 108.0, 108.0)),
@@ -124,6 +137,7 @@ pub fn new_element(kind: ElementKind, offset: f32) -> Element {
             quiet_zone: 4,
             color: "#20252A".to_owned(),
             background: "#FFFFFF".to_owned(),
+            rotation: 0.0,
         }),
         ElementKind::Barcode => Element::Barcode(BarcodeElement {
             position: Some(bounds(x, y, 252.0, 72.0)),
@@ -132,6 +146,7 @@ pub fn new_element(kind: ElementKind, offset: f32) -> Element {
             quiet_zone: 10,
             color: "#20252A".to_owned(),
             background: "#FFFFFF".to_owned(),
+            rotation: 0.0,
         }),
     }
 }
@@ -203,6 +218,45 @@ pub fn element_bounds_mut(element: &mut Element) -> Option<&mut Bounds> {
     }
 }
 
+pub fn element_rotation(element: &Element) -> Option<f32> {
+    match element {
+        Element::Text(value) => Some(value.rotation),
+        Element::Image(value) => Some(value.rotation),
+        Element::Rectangle(value) => Some(value.rotation),
+        Element::Svg(value) => Some(value.rotation),
+        Element::QrCode(value) => Some(value.rotation),
+        Element::Barcode(value) => Some(value.rotation),
+        Element::Line(_)
+        | Element::Group(_)
+        | Element::Stack(_)
+        | Element::Table(_)
+        | Element::Repeater(_)
+        | Element::PageBreak => None,
+    }
+}
+
+pub fn set_element_rotation(element: &mut Element, rotation: f32) {
+    let rotation = normalize_rotation(rotation);
+    match element {
+        Element::Text(value) => value.rotation = rotation,
+        Element::Image(value) => value.rotation = rotation,
+        Element::Rectangle(value) => value.rotation = rotation,
+        Element::Svg(value) => value.rotation = rotation,
+        Element::QrCode(value) => value.rotation = rotation,
+        Element::Barcode(value) => value.rotation = rotation,
+        Element::Line(_)
+        | Element::Group(_)
+        | Element::Stack(_)
+        | Element::Table(_)
+        | Element::Repeater(_)
+        | Element::PageBreak => {}
+    }
+}
+
+fn normalize_rotation(rotation: f32) -> f32 {
+    (rotation + 180.0).rem_euclid(360.0) - 180.0
+}
+
 pub fn bounds_points(bounds: &Bounds) -> [f32; 4] {
     [
         bounds.x.to_points(),
@@ -239,6 +293,24 @@ pub fn translate_line_endpoint(
     };
     add_points(x, dx_points);
     add_points(y, dy_points);
+}
+
+pub fn reorder_element(elements: &mut Vec<Element>, index: usize, movement: LayerMove) -> usize {
+    if index >= elements.len() {
+        return index;
+    }
+    let target = match movement {
+        LayerMove::Back => 0,
+        LayerMove::Backward => index.saturating_sub(1),
+        LayerMove::Forward => (index + 1).min(elements.len() - 1),
+        LayerMove::Front => elements.len() - 1,
+    };
+    if target == index {
+        return index;
+    }
+    let element = elements.remove(index);
+    elements.insert(target, element);
+    target
 }
 
 pub fn resize_element(element: &mut Element, width_points: f32, height_points: f32) {
@@ -288,8 +360,9 @@ mod tests {
     use print_forge_validation::validate_template;
 
     use super::{
-        ElementKind, LineEndpoint, bounds_points, element_bounds, new_element, starter_template,
-        translate_element, translate_line_endpoint,
+        ElementKind, LayerMove, LineEndpoint, bounds_points, element_bounds, element_rotation,
+        new_element, reorder_element, set_element_rotation, starter_template, translate_element,
+        translate_line_endpoint,
     };
 
     #[test]
@@ -326,5 +399,29 @@ mod tests {
         assert_eq!(line.y1.to_points(), 630.0);
         assert_eq!(line.x2.to_points(), 294.0);
         assert_eq!(line.y2.to_points(), 620.0);
+    }
+
+    #[test]
+    fn visual_elements_have_normalized_rotation() {
+        let mut text = new_element(ElementKind::Text, 0.0);
+        set_element_rotation(&mut text, 450.0);
+
+        assert_eq!(element_rotation(&text), Some(90.0));
+    }
+
+    #[test]
+    fn layers_can_move_through_the_canonical_paint_order() {
+        let mut elements = vec![
+            new_element(ElementKind::Text, 0.0),
+            new_element(ElementKind::Rectangle, 0.0),
+            new_element(ElementKind::Svg, 0.0),
+        ];
+
+        let selected = reorder_element(&mut elements, 0, LayerMove::Front);
+        assert_eq!(selected, 2);
+        assert!(matches!(elements[2], Element::Text(_)));
+        let selected = reorder_element(&mut elements, selected, LayerMove::Backward);
+        assert_eq!(selected, 1);
+        assert!(matches!(elements[1], Element::Text(_)));
     }
 }

@@ -34,6 +34,8 @@ pub struct ResolvedPage {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResolvedCommand {
     pub source_path: String,
+    /// Clockwise rotation around the command bounds center, in degrees.
+    pub rotation: f32,
     pub command: DrawCommand,
 }
 
@@ -340,6 +342,7 @@ fn layout_template_page(
                     .commands
                     .push(ResolvedCommand {
                         source_path,
+                        rotation: element_rotation(element),
                         command,
                     });
             }
@@ -419,6 +422,7 @@ fn layout_repeating_elements(
                         .map_err(|source| layout_error(page_index, &source_path, source))?;
                     commands.push(ResolvedCommand {
                         source_path,
+                        rotation: element_rotation(element),
                         command,
                     });
                 }
@@ -490,6 +494,7 @@ fn layout_group(
             }
             Element::Line(line) => Ok(vec![ResolvedCommand {
                 source_path: child_path.clone(),
+                rotation: 0.0,
                 command: DrawCommand::Line(LineCommand {
                     start: Point {
                         x: group_bounds.x + line.x1.to_points(),
@@ -524,6 +529,7 @@ fn layout_group(
                     })?;
                 Ok(vec![ResolvedCommand {
                     source_path: child_path.clone(),
+                    rotation: element_rotation(child),
                     command: layout_element_at(child, Some(bounds), template, data, options)?,
                 }])
             }
@@ -645,6 +651,7 @@ fn layout_repeated_element(
         }
         _ => Ok(vec![ResolvedCommand {
             source_path: source_path.to_owned(),
+            rotation: element_rotation(element),
             command: layout_element_at(element, Some(bounds), template, data, options)?,
         }]),
     }
@@ -681,6 +688,23 @@ fn element_bounds(element: &Element) -> Option<&print_forge_template::Bounds> {
         Element::Stack(element) => element.position.as_ref(),
         Element::Table(element) => element.position.as_ref(),
         Element::Line(_) | Element::Repeater(_) | Element::PageBreak => None,
+    }
+}
+
+fn element_rotation(element: &Element) -> f32 {
+    match element {
+        Element::Text(element) => element.rotation,
+        Element::Image(element) => element.rotation,
+        Element::Rectangle(element) => element.rotation,
+        Element::Svg(element) => element.rotation,
+        Element::QrCode(element) => element.rotation,
+        Element::Barcode(element) => element.rotation,
+        Element::Line(_)
+        | Element::Group(_)
+        | Element::Stack(_)
+        | Element::Table(_)
+        | Element::Repeater(_)
+        | Element::PageBreak => 0.0,
     }
 }
 
@@ -1184,6 +1208,7 @@ fn append_table_row(
     if let Some(fill) = background {
         commands.push(ResolvedCommand {
             source_path: format!("{source_path}.background"),
+            rotation: 0.0,
             command: DrawCommand::Rectangle(RectangleCommand {
                 bounds: Rect {
                     x: table_x,
@@ -1224,6 +1249,7 @@ fn append_table_row(
         )?;
         commands.push(ResolvedCommand {
             source_path: format!("{source_path}.cells[{column_index}]"),
+            rotation: 0.0,
             command: DrawCommand::Text(TextCommand {
                 bounds,
                 lines: laid_out.lines,
@@ -1254,6 +1280,7 @@ fn append_table_grid(
     for (index, y) in horizontal_boundaries.iter().enumerate() {
         commands.push(ResolvedCommand {
             source_path: format!("{source_path}.horizontal[{index}]"),
+            rotation: 0.0,
             command: DrawCommand::Line(LineCommand {
                 start: Point { x: table_x, y: *y },
                 end: Point {
@@ -1271,6 +1298,7 @@ fn append_table_grid(
     for index in 0..=column_widths.len() {
         commands.push(ResolvedCommand {
             source_path: format!("{source_path}.vertical[{index}]"),
+            rotation: 0.0,
             command: DrawCommand::Line(LineCommand {
                 start: Point { x, y: top },
                 end: Point { x, y: bottom },
@@ -1650,6 +1678,7 @@ fn layout_flow_element(
     let command = layout_element_at(element, Some(bounds), template, data, options)?;
     Ok(vec![ResolvedCommand {
         source_path: source_path.to_owned(),
+        rotation: element_rotation(element),
         command,
     }])
 }
@@ -2450,7 +2479,8 @@ mod tests {
                 "height": { "value": 0.25, "unit": "inches" }
               },
               "value": "{{person.name}} — {{title}}",
-              "font_size": { "value": 12.0, "unit": "points" }
+              "font_size": { "value": 12.0, "unit": "points" },
+              "rotation": 30
             }]
           }]
         }
@@ -2472,6 +2502,7 @@ mod tests {
 
         assert_eq!(text.lines[0].value, "Ada — Engineer");
         assert_eq!(text.bounds.x, 72.0);
+        assert_eq!(document.pages[0].commands[0].rotation, 30.0);
     }
 
     #[test]

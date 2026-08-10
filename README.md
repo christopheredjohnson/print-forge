@@ -31,16 +31,19 @@ cargo run -p print-forge-studio
 ```
 
 The initial Studio supports native open/save dialogs, multipage projects,
-draggable and resizable page elements, a layer list, document and element
-inspectors with inline color pickers, variable-field definitions, live semantic
-validation, raw JSON editing for advanced elements, preview data, and direct PDF
-rendering through the Print Forge layout and PDF crates. Both the design canvas
-and its read-only rendered-preview mode use resolved engine output, so preview
-data, wrapped text, flow pagination, composed elements, raster images, SVG
-artwork, QR codes, and Code 128 bars are represented on screen. Generated
-continuation pages can be navigated directly in rendered-preview mode, and bleed
-and trim boundaries are shown separately. Missing preview values remain visible
-as `{{field}}` placeholders and are reported in the canvas toolbar instead of
+draggable, resizable, and rotatable page elements, controllable layer ordering,
+document and element inspectors with inline color pickers, variable-field
+definitions, live semantic validation, raw JSON editing for advanced elements,
+preview data, and direct PDF rendering through the Print Forge layout and PDF
+crates. Elements can be rotated with the canvas handle, an exact inspector
+value, or the 90-degree shortcuts. Layer controls move the selection backward,
+forward, fully behind, or fully in front. Both the design canvas and its
+read-only rendered-preview mode use resolved engine output, so preview data,
+wrapped text, flow pagination, composed elements, raster images, SVG artwork, QR
+codes, and Code 128 bars are represented on screen. Generated continuation
+pages can be navigated directly in rendered-preview mode, and bleed and trim
+boundaries are shown separately. Missing preview values remain visible as
+`{{field}}` placeholders and are reported in the canvas toolbar instead of
 preventing the preview from rendering. Screen font rasterization is still an
 approximation; the rendered PDF remains authoritative for final typography and
 print inspection.
@@ -153,6 +156,20 @@ cargo run -- render examples/product-catalog.json examples/product-catalog-data.
 ```
 
 ## Output and template behavior
+
+### Position, rotation, and paint order
+
+Page, header, footer, group, stack, and repeater element arrays paint in their
+declared order: later visual elements appear in front of earlier ones. Studio's
+layer list shows the frontmost element at the top and changes this canonical
+array order when an element moves backward or forward, so Studio, library, and
+CLI output remain consistent.
+
+Text, image, rectangle, SVG, QR code, and barcode elements accept an optional
+`rotation` number in clockwise degrees. Rotation uses the center of the
+element's bounds as its pivot. Lines retain endpoint-based direction, while
+groups, stacks, tables, repeaters, and page breaks currently do not accept
+rotation.
 
 ### Print-ready PDFs
 

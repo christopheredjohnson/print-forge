@@ -123,6 +123,14 @@ impl PdfRenderer {
             ];
 
             for command in &page.commands {
+                ops.push(Op::SaveGraphicsState);
+                if command.rotation != 0.0
+                    && let Some((center_x, center_y)) = command_center(&command.command)
+                {
+                    ops.push(Op::SetTransformationMatrix {
+                        matrix: rotation_matrix(command.rotation, center_x, center_y),
+                    });
+                }
                 let result = match &command.command {
                     DrawCommand::Text(text) => render_text(text, &mut pdf, &mut fonts, &mut ops),
                     DrawCommand::Rectangle(rectangle) => render_rectangle(rectangle, &mut ops),
@@ -134,6 +142,7 @@ impl PdfRenderer {
                     DrawCommand::QrCode(qr_code) => render_qr_code(qr_code, &mut ops),
                     DrawCommand::Barcode(barcode) => render_barcode(barcode, &mut ops),
                 };
+                ops.push(Op::RestoreGraphicsState);
 
                 result.with_context(|| {
                     format!("page {page_index}, element {}", command.source_path)
@@ -163,6 +172,36 @@ impl PdfRenderer {
         }
         Ok(bytes)
     }
+}
+
+fn command_center(command: &DrawCommand) -> Option<(f32, f32)> {
+    let bounds = match command {
+        DrawCommand::Text(command) => command.bounds,
+        DrawCommand::Image(command) => command.bounds,
+        DrawCommand::Rectangle(command) => command.bounds,
+        DrawCommand::Svg(command) => command.bounds,
+        DrawCommand::QrCode(command) => command.bounds,
+        DrawCommand::Barcode(command) => command.bounds,
+        DrawCommand::Line(_) => return None,
+    };
+    Some((
+        bounds.x + bounds.width / 2.0,
+        bounds.y + bounds.height / 2.0,
+    ))
+}
+
+fn rotation_matrix(clockwise_degrees: f32, center_x: f32, center_y: f32) -> CurTransMat {
+    let radians = (360.0 - clockwise_degrees).to_radians();
+    let cosine = radians.cos();
+    let sine = radians.sin();
+    CurTransMat::Raw([
+        cosine,
+        -sine,
+        sine,
+        cosine,
+        center_x - cosine * center_x - sine * center_y,
+        center_y + sine * center_x - cosine * center_y,
+    ])
 }
 
 fn configure_metadata(
@@ -1062,7 +1101,8 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        DocumentRenderer, PdfRenderOptions, PdfRenderer, PdfXStandard, read_box, validate_pdf_x,
+        DocumentRenderer, PdfRenderOptions, PdfRenderer, PdfXStandard, read_box, rotation_matrix,
+        validate_pdf_x,
     };
 
     fn print_ready_fixture() -> ResolvedDocument {
@@ -1107,6 +1147,7 @@ mod tests {
                 commands: vec![
                     ResolvedCommand {
                         source_path: "pages[0].elements[0]".to_owned(),
+                        rotation: 30.0,
                         command: DrawCommand::Text(TextCommand {
                             bounds: Rect {
                                 x: 36.0,
@@ -1129,6 +1170,7 @@ mod tests {
                     },
                     ResolvedCommand {
                         source_path: "pages[0].elements[1]".to_owned(),
+                        rotation: 0.0,
                         command: DrawCommand::Line(LineCommand {
                             start: Point { x: 36.0, y: 72.0 },
                             end: Point { x: 216.0, y: 72.0 },
@@ -1144,9 +1186,27 @@ mod tests {
         let bytes = PdfRenderer.render(&document).unwrap();
         let parsed =
             PdfDocument::parse(&bytes, &PdfParseOptions::default(), &mut Vec::new()).unwrap();
+        let lopdf = lopdf::Document::load_mem(&bytes).unwrap();
+        let page_id = lopdf.get_pages()[&1];
+        let content_bytes = lopdf.get_page_content(page_id);
+        let content = String::from_utf8_lossy(&content_bytes);
 
         assert!(bytes.starts_with(b"%PDF-"));
         assert_eq!(parsed.pages.len(), 1);
+        assert!(
+            content.contains("0.866"),
+            "rotation matrix should be emitted"
+        );
+    }
+
+    #[test]
+    fn rotation_matrix_keeps_the_element_center_fixed() {
+        let matrix = rotation_matrix(90.0, 10.0, 20.0).as_array();
+        let transformed_x = matrix[0] * 10.0 + matrix[2] * 20.0 + matrix[4];
+        let transformed_y = matrix[1] * 10.0 + matrix[3] * 20.0 + matrix[5];
+
+        assert!((transformed_x - 10.0).abs() < 0.001);
+        assert!((transformed_y - 20.0).abs() < 0.001);
     }
 
     #[test]
@@ -1160,6 +1220,7 @@ mod tests {
             pages: vec![ResolvedPage {
                 commands: vec![ResolvedCommand {
                     source_path: "pages[0].elements[3]".to_owned(),
+                    rotation: 0.0,
                     command: DrawCommand::Image(ImageCommand {
                         bounds: Rect {
                             x: 0.0,
@@ -1286,6 +1347,7 @@ mod tests {
             .join("../../examples/assets/images/layout-fixture.png");
         document.pages[0].commands.push(ResolvedCommand {
             source_path: "pages[0].elements[3]".to_owned(),
+            rotation: 0.0,
             command: DrawCommand::Image(ImageCommand {
                 bounds: Rect {
                     x: 0.0,

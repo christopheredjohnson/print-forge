@@ -7,9 +7,8 @@ use std::{
 };
 
 use eframe::egui::{
-    self, Align, Align2, Color32, ComboBox, CornerRadius, FontId, Frame, Id, Key, Layout, Margin,
-    Pos2, Rect, RichText, ScrollArea, Sense, Stroke, StrokeKind, TextureHandle, TextureOptions,
-    Vec2,
+    self, Align, Color32, ComboBox, CornerRadius, FontId, Frame, Id, Key, Layout, Margin, Pos2,
+    Rect, RichText, ScrollArea, Sense, Stroke, StrokeKind, TextureHandle, TextureOptions, Vec2,
 };
 use print_forge_dataset::DataRow;
 use print_forge_engine::{
@@ -26,8 +25,9 @@ use rfd::{FileDialog, MessageButtons, MessageDialog, MessageDialogResult, Messag
 use serde::{Deserialize, Serialize};
 
 use crate::model::{
-    ElementKind, LineEndpoint, blank_page, bounds_points, element_bounds, element_bounds_mut,
-    element_label, new_element, new_field, resize_element, starter_template, translate_element,
+    ElementKind, LayerMove, LineEndpoint, blank_page, bounds_points, element_bounds,
+    element_bounds_mut, element_label, element_rotation, new_element, new_field, reorder_element,
+    resize_element, set_element_rotation, starter_template, translate_element,
     translate_line_endpoint,
 };
 
@@ -76,6 +76,13 @@ enum CanvasMode {
 enum AssetKind {
     Raster,
     Svg,
+}
+
+#[derive(Clone, Copy)]
+struct AssetPaint {
+    fit: ImageFit,
+    kind: AssetKind,
+    transform: ScreenTransform,
 }
 
 #[derive(Default)]
@@ -478,6 +485,65 @@ impl StudioApp {
                             self.selection = Selection::Element(index);
                         }
                     }
+                    if let Selection::Element(index) = self.selection {
+                        let layer_count = self.template.pages[self.current_page].elements.len();
+                        ui.add_space(6.0);
+                        ui.horizontal(|ui| {
+                            if ui
+                                .add_enabled(index > 0, egui::Button::new("Back"))
+                                .on_hover_text("Send behind every other layer")
+                                .clicked()
+                            {
+                                let selected = reorder_element(
+                                    &mut self.template.pages[self.current_page].elements,
+                                    index,
+                                    LayerMove::Back,
+                                );
+                                self.selection = Selection::Element(selected);
+                                self.dirty = true;
+                            }
+                            if ui
+                                .add_enabled(index > 0, egui::Button::new("↓"))
+                                .on_hover_text("Move backward one layer")
+                                .clicked()
+                            {
+                                let selected = reorder_element(
+                                    &mut self.template.pages[self.current_page].elements,
+                                    index,
+                                    LayerMove::Backward,
+                                );
+                                self.selection = Selection::Element(selected);
+                                self.dirty = true;
+                            }
+                            if ui
+                                .add_enabled(index + 1 < layer_count, egui::Button::new("↑"))
+                                .on_hover_text("Move forward one layer")
+                                .clicked()
+                            {
+                                let selected = reorder_element(
+                                    &mut self.template.pages[self.current_page].elements,
+                                    index,
+                                    LayerMove::Forward,
+                                );
+                                self.selection = Selection::Element(selected);
+                                self.dirty = true;
+                            }
+                            if ui
+                                .add_enabled(index + 1 < layer_count, egui::Button::new("Front"))
+                                .on_hover_text("Bring in front of every other layer")
+                                .clicked()
+                            {
+                                let selected = reorder_element(
+                                    &mut self.template.pages[self.current_page].elements,
+                                    index,
+                                    LayerMove::Front,
+                                );
+                                self.selection = Selection::Element(selected);
+                                self.dirty = true;
+                            }
+                        });
+                        ui.small("Topmost layer paints in front.");
+                    }
 
                     ui.add_space(16.0);
                     ui.horizontal(|ui| {
@@ -869,6 +935,13 @@ impl StudioApp {
                             );
                             self.dirty = true;
                         }
+                        if let Some(rotation) = interaction.rotation {
+                            set_element_rotation(
+                                &mut self.template.pages[self.current_page].elements[index],
+                                rotation,
+                            );
+                            self.dirty = true;
+                        }
                     }
                 } else if let Err(error) = &preview {
                     paint_preview_error(&painter, page_rect, error);
@@ -1225,6 +1298,7 @@ struct ElementInteraction {
     translate: Option<Vec2>,
     resize: Option<Vec2>,
     line_endpoint: Option<(LineEndpoint, Vec2)>,
+    rotation: Option<f32>,
 }
 
 struct ElementPaintOptions {
@@ -1242,11 +1316,21 @@ fn paint_resolved_page(
     assets: &mut AssetCache,
 ) {
     for resolved_command in &resolved.commands {
+        let transform = command_screen_transform(
+            page,
+            scale,
+            &resolved_command.command,
+            resolved_command.rotation,
+        );
         match &resolved_command.command {
             DrawCommand::Text(text) => {
                 let bounds = resolved_bounds(page, scale, text.bounds);
                 let text_painter = if text.clip {
-                    painter.with_clip_rect(painter.clip_rect().intersect(bounds))
+                    painter.with_clip_rect(
+                        painter
+                            .clip_rect()
+                            .intersect(transformed_rect_bounds(bounds, transform)),
+                    )
                 } else {
                     painter.clone()
                 };
@@ -1255,24 +1339,26 @@ fn paint_resolved_page(
                 for line in &text.lines {
                     let mut position = page_point(page, scale, line.x, line.y);
                     if line.word_spacing_pt.abs() < f32::EPSILON {
-                        text_painter.text(
+                        paint_rotated_text(
+                            &text_painter,
                             position,
-                            Align2::LEFT_BOTTOM,
                             &line.value,
-                            font.clone(),
+                            &font,
                             color,
+                            transform,
                         );
                         continue;
                     }
                     for word in line.value.split_inclusive(' ') {
-                        let painted = text_painter.text(
+                        let width = paint_rotated_text(
+                            &text_painter,
                             position,
-                            Align2::LEFT_BOTTOM,
                             word,
-                            font.clone(),
+                            &font,
                             color,
+                            transform,
                         );
-                        position.x = painted.right();
+                        position.x += width;
                         if word.ends_with(' ') {
                             position.x += line.word_spacing_pt * scale;
                         }
@@ -1282,10 +1368,10 @@ fn paint_resolved_page(
             DrawCommand::Rectangle(rectangle) => {
                 let rect = resolved_bounds(page, scale, rectangle.bounds);
                 if let Some(fill) = rectangle.fill {
-                    painter.rect_filled(rect, CornerRadius::ZERO, print_color(fill));
+                    paint_transformed_rect(painter, rect, print_color(fill), transform);
                 }
                 if let Some(stroke) = &rectangle.stroke {
-                    paint_rect_stroke(
+                    paint_transformed_rect_stroke(
                         painter,
                         rect,
                         Stroke::new(
@@ -1293,6 +1379,7 @@ fn paint_resolved_page(
                             print_color(stroke.color),
                         ),
                         stroke.dash,
+                        transform,
                     );
                 }
             }
@@ -1308,29 +1395,36 @@ fn paint_resolved_page(
                 painter,
                 resolved_bounds(page, scale, image.bounds),
                 &image.source,
-                image.fit,
-                AssetKind::Raster,
                 assets,
+                AssetPaint {
+                    fit: image.fit,
+                    kind: AssetKind::Raster,
+                    transform,
+                },
             ),
             DrawCommand::Svg(svg) => paint_asset(
                 ctx,
                 painter,
                 resolved_bounds(page, scale, svg.bounds),
                 &svg.source,
-                svg.fit,
-                AssetKind::Svg,
                 assets,
+                AssetPaint {
+                    fit: svg.fit,
+                    kind: AssetKind::Svg,
+                    transform,
+                },
             ),
             DrawCommand::QrCode(qr) => {
                 let rect = resolved_bounds(page, scale, qr.bounds);
-                painter.rect_filled(rect, CornerRadius::ZERO, print_color(qr.background));
+                paint_transformed_rect(painter, rect, print_color(qr.background), transform);
                 let total = qr.size + usize::from(qr.quiet_zone) * 2;
                 let module = rect.width() / total as f32;
                 let quiet = usize::from(qr.quiet_zone);
                 for y in 0..qr.size {
                     for x in 0..qr.size {
                         if qr.modules[y * qr.size + x] {
-                            painter.rect_filled(
+                            paint_transformed_rect(
+                                painter,
                                 Rect::from_min_size(
                                     Pos2::new(
                                         rect.left() + (quiet + x) as f32 * module,
@@ -1338,8 +1432,8 @@ fn paint_resolved_page(
                                     ),
                                     Vec2::splat(module + 0.25),
                                 ),
-                                CornerRadius::ZERO,
                                 print_color(qr.color),
+                                transform,
                             );
                         }
                     }
@@ -1347,13 +1441,14 @@ fn paint_resolved_page(
             }
             DrawCommand::Barcode(barcode) => {
                 let rect = resolved_bounds(page, scale, barcode.bounds);
-                painter.rect_filled(rect, CornerRadius::ZERO, print_color(barcode.background));
+                paint_transformed_rect(painter, rect, print_color(barcode.background), transform);
                 let total = barcode.modules.len() + usize::from(barcode.quiet_zone) * 2;
                 let module = rect.width() / total as f32;
                 let quiet = usize::from(barcode.quiet_zone);
                 for (index, active) in barcode.modules.iter().enumerate() {
                     if *active {
-                        painter.rect_filled(
+                        paint_transformed_rect(
+                            painter,
                             Rect::from_min_max(
                                 Pos2::new(
                                     rect.left() + (quiet + index) as f32 * module,
@@ -1364,8 +1459,8 @@ fn paint_resolved_page(
                                     rect.bottom(),
                                 ),
                             ),
-                            CornerRadius::ZERO,
                             print_color(barcode.color),
+                            transform,
                         );
                     }
                 }
@@ -1380,6 +1475,124 @@ fn resolved_bounds(page: Rect, scale: f32, bounds: print_forge_engine::Rect) -> 
         scale,
         [bounds.x, bounds.y, bounds.width, bounds.height],
     )
+}
+
+#[derive(Clone, Copy)]
+struct ScreenTransform {
+    center: Pos2,
+    angle: f32,
+}
+
+impl ScreenTransform {
+    fn point(self, point: Pos2) -> Pos2 {
+        if self.angle.abs() < f32::EPSILON {
+            return point;
+        }
+        let offset = point - self.center;
+        let sine = self.angle.sin();
+        let cosine = self.angle.cos();
+        self.center
+            + Vec2::new(
+                cosine * offset.x - sine * offset.y,
+                sine * offset.x + cosine * offset.y,
+            )
+    }
+}
+
+fn command_screen_transform(
+    page: Rect,
+    scale: f32,
+    command: &DrawCommand,
+    clockwise_degrees: f32,
+) -> ScreenTransform {
+    let bounds = match command {
+        DrawCommand::Text(command) => Some(command.bounds),
+        DrawCommand::Image(command) => Some(command.bounds),
+        DrawCommand::Rectangle(command) => Some(command.bounds),
+        DrawCommand::Svg(command) => Some(command.bounds),
+        DrawCommand::QrCode(command) => Some(command.bounds),
+        DrawCommand::Barcode(command) => Some(command.bounds),
+        DrawCommand::Line(_) => None,
+    };
+    let center = bounds.map_or(page.center(), |bounds| {
+        resolved_bounds(page, scale, bounds).center()
+    });
+    ScreenTransform {
+        center,
+        angle: clockwise_degrees.to_radians(),
+    }
+}
+
+fn paint_rotated_text(
+    painter: &egui::Painter,
+    baseline: Pos2,
+    value: &str,
+    font: &FontId,
+    color: Color32,
+    transform: ScreenTransform,
+) -> f32 {
+    let galley = painter.layout_no_wrap(value.to_owned(), font.clone(), color);
+    let width = galley.size().x;
+    let top_left = baseline - Vec2::new(0.0, galley.size().y);
+    painter.add(
+        egui::epaint::TextShape::new(transform.point(top_left), galley, color)
+            .with_angle(transform.angle),
+    );
+    width
+}
+
+fn transformed_rect_points(rect: Rect, transform: ScreenTransform) -> [Pos2; 4] {
+    [
+        transform.point(rect.left_top()),
+        transform.point(rect.right_top()),
+        transform.point(rect.right_bottom()),
+        transform.point(rect.left_bottom()),
+    ]
+}
+
+fn transformed_rect_bounds(rect: Rect, transform: ScreenTransform) -> Rect {
+    let points = transformed_rect_points(rect, transform);
+    let mut bounds = Rect::NOTHING;
+    for point in points {
+        bounds.extend_with(point);
+    }
+    bounds
+}
+
+fn paint_transformed_rect(
+    painter: &egui::Painter,
+    rect: Rect,
+    color: Color32,
+    transform: ScreenTransform,
+) {
+    if transform.angle.abs() < f32::EPSILON {
+        painter.rect_filled(rect, CornerRadius::ZERO, color);
+    } else {
+        painter.add(egui::Shape::convex_polygon(
+            transformed_rect_points(rect, transform).to_vec(),
+            color,
+            Stroke::NONE,
+        ));
+    }
+}
+
+fn paint_transformed_rect_stroke(
+    painter: &egui::Painter,
+    rect: Rect,
+    stroke: Stroke,
+    dash: LineDash,
+    transform: ScreenTransform,
+) {
+    let points = transformed_rect_points(rect, transform);
+    for index in 0..points.len() {
+        paint_styled_line(
+            painter,
+            points[index],
+            points[(index + 1) % points.len()],
+            stroke,
+            dash,
+        );
+    }
 }
 
 fn print_color(color: PrintColor) -> Color32 {
@@ -1452,23 +1665,30 @@ fn paint_asset(
     painter: &egui::Painter,
     bounds: Rect,
     path: &Path,
-    fit: ImageFit,
-    kind: AssetKind,
     assets: &mut AssetCache,
+    paint: AssetPaint,
 ) {
     let path_text = path.to_string_lossy();
     if let Some(variable) = first_template_variable(&path_text) {
-        let title = match kind {
+        let title = match paint.kind {
             AssetKind::Raster => "IMAGE PLACEHOLDER",
             AssetKind::Svg => "SVG PLACEHOLDER",
         };
         let detail = format!("{{{{{variable}}}}}");
-        paint_placeholder(painter, bounds, title, &detail);
+        paint_placeholder(painter, bounds, title, &detail, Some(paint.transform));
         return;
     }
-    match asset_texture(ctx, path, kind, assets) {
-        Ok(texture) => paint_fitted_texture(painter, bounds, &texture, fit),
-        Err(error) => paint_placeholder(painter, bounds, "ASSET UNAVAILABLE", &error),
+    match asset_texture(ctx, path, paint.kind, assets) {
+        Ok(texture) => {
+            paint_fitted_texture(painter, bounds, &texture, paint.fit, paint.transform);
+        }
+        Err(error) => paint_placeholder(
+            painter,
+            bounds,
+            "ASSET UNAVAILABLE",
+            &error,
+            Some(paint.transform),
+        ),
     }
 }
 
@@ -1538,6 +1758,7 @@ fn paint_fitted_texture(
     bounds: Rect,
     texture: &TextureHandle,
     fit: ImageFit,
+    transform: ScreenTransform,
 ) {
     let source = texture.size_vec2();
     if source.x <= 0.0 || source.y <= 0.0 {
@@ -1545,11 +1766,13 @@ fn paint_fitted_texture(
     }
     let full_uv = Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0));
     match fit {
-        ImageFit::Stretch => painter.image(texture.id(), bounds, full_uv, Color32::WHITE),
+        ImageFit::Stretch => {
+            paint_transformed_texture(painter, bounds, full_uv, texture, transform)
+        }
         ImageFit::Contain => {
             let factor = (bounds.width() / source.x).min(bounds.height() / source.y);
             let destination = Rect::from_center_size(bounds.center(), source * factor);
-            painter.image(texture.id(), destination, full_uv, Color32::WHITE)
+            paint_transformed_texture(painter, destination, full_uv, texture, transform)
         }
         ImageFit::Cover => {
             let source_aspect = source.x / source.y;
@@ -1563,9 +1786,28 @@ fn paint_fitted_texture(
                 let inset = (1.0 - visible) / 2.0;
                 Rect::from_min_max(Pos2::new(0.0, inset), Pos2::new(1.0, 1.0 - inset))
             };
-            painter.image(texture.id(), bounds, uv, Color32::WHITE)
+            paint_transformed_texture(painter, bounds, uv, texture, transform)
         }
     };
+}
+
+fn paint_transformed_texture(
+    painter: &egui::Painter,
+    bounds: Rect,
+    uv: Rect,
+    texture: &TextureHandle,
+    transform: ScreenTransform,
+) {
+    if transform.angle.abs() < f32::EPSILON {
+        painter.image(texture.id(), bounds, uv, Color32::WHITE);
+        return;
+    }
+    let mut mesh = egui::Mesh::with_texture(texture.id());
+    mesh.add_rect_with_uv(bounds, uv, Color32::WHITE);
+    for vertex in &mut mesh.vertices {
+        vertex.pos = transform.point(vertex.pos);
+    }
+    painter.add(mesh);
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -1711,6 +1953,7 @@ fn paint_element(
         translate: None,
         resize: None,
         line_endpoint: None,
+        rotation: None,
     };
     if let Element::Line(line) = element {
         let start = page_point(page, scale, line.x1.to_points(), line.y1.to_points());
@@ -1774,11 +2017,17 @@ fn paint_element(
     };
     let points = bounds_points(bounds);
     let rect = page_bounds(page, scale, points);
+    let rotation = element_rotation(element).unwrap_or(0.0);
+    let transform = ScreenTransform {
+        center: rect.center(),
+        angle: rotation.to_radians(),
+    };
     if options.paint_content {
-        paint_element_content(painter, rect, scale, element);
+        paint_element_content(painter, rect, scale, element, transform);
     }
+    let interaction_bounds = transformed_rect_bounds(rect, transform);
     let response = ui.interact(
-        rect,
+        interaction_bounds,
         Id::new(("canvas-element", options.index)),
         Sense::click_and_drag(),
     );
@@ -1790,13 +2039,15 @@ fn paint_element(
         ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
     }
     if options.selected {
-        painter.rect_stroke(
+        paint_transformed_rect_stroke(
+            painter,
             rect,
-            CornerRadius::same(2),
             Stroke::new(2.0_f32, ORANGE),
-            StrokeKind::Outside,
+            LineDash::Solid,
+            transform,
         );
-        let handle = Rect::from_center_size(rect.right_top(), Vec2::splat(12.0));
+        let resize_center = transform.point(rect.right_top());
+        let handle = Rect::from_center_size(resize_center, Vec2::splat(12.0));
         painter.rect_filled(handle, CornerRadius::same(2), ORANGE);
         let resize = ui.interact(
             handle,
@@ -1804,98 +2055,191 @@ fn paint_element(
             Sense::drag(),
         );
         if resize.dragged() {
-            let delta = ui.input(|input| input.pointer.delta());
+            let delta =
+                inverse_rotate_vector(ui.input(|input| input.pointer.delta()), transform.angle);
             interaction.translate = None;
             interaction.resize = Some(Vec2::new(rect.width() + delta.x, rect.height() - delta.y));
             ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeNeSw);
+        }
+        if element_rotation(element).is_some() {
+            let stem_start = transform.point(rect.center_top());
+            let rotation_center = transform.point(rect.center_top() - Vec2::new(0.0, 26.0));
+            painter.line_segment([stem_start, rotation_center], Stroke::new(1.5_f32, ORANGE));
+            painter.circle_filled(rotation_center, 7.0, Color32::WHITE);
+            painter.circle_stroke(rotation_center, 7.0, Stroke::new(2.0_f32, ORANGE));
+            let rotation_handle = Rect::from_center_size(rotation_center, Vec2::splat(18.0));
+            let rotate = ui.interact(
+                rotation_handle,
+                Id::new(("canvas-rotation", options.index)),
+                Sense::click_and_drag(),
+            );
+            if rotate.dragged()
+                && let Some(pointer) = ui.input(|input| input.pointer.interact_pos())
+            {
+                let vector = pointer - rect.center();
+                interaction.rotation = Some(vector.y.atan2(vector.x).to_degrees() + 90.0);
+                interaction.translate = None;
+                interaction.resize = None;
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+            } else if rotate.hovered() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+            }
         }
     }
     interaction
 }
 
-fn paint_element_content(painter: &egui::Painter, rect: Rect, scale: f32, element: &Element) {
+fn inverse_rotate_vector(vector: Vec2, angle: f32) -> Vec2 {
+    let sine = angle.sin();
+    let cosine = angle.cos();
+    Vec2::new(
+        cosine * vector.x + sine * vector.y,
+        -sine * vector.x + cosine * vector.y,
+    )
+}
+
+const fn line_dash(dash: DashStyle) -> LineDash {
+    match dash {
+        DashStyle::Solid => LineDash::Solid,
+        DashStyle::Dashed => LineDash::Dashed,
+        DashStyle::Dotted => LineDash::Dotted,
+    }
+}
+
+fn paint_element_content(
+    painter: &egui::Painter,
+    rect: Rect,
+    scale: f32,
+    element: &Element,
+    transform: ScreenTransform,
+) {
     match element {
         Element::Text(text) => {
             let font_size = (text.font_size.to_points() * scale).clamp(8.0, 34.0);
-            painter.text(
-                rect.left_top() + Vec2::new(3.0, 2.0),
-                Align2::LEFT_TOP,
-                &text.value,
-                FontId::proportional(font_size),
-                parse_color(&text.color),
+            let color = parse_color(&text.color);
+            let galley =
+                painter.layout_no_wrap(text.value.clone(), FontId::proportional(font_size), color);
+            painter.add(
+                egui::epaint::TextShape::new(
+                    transform.point(rect.left_top() + Vec2::new(3.0, 2.0)),
+                    galley,
+                    color,
+                )
+                .with_angle(transform.angle),
             );
         }
         Element::Rectangle(rectangle) => {
-            painter.rect_filled(
+            paint_transformed_rect(
+                painter,
                 rect,
-                CornerRadius::ZERO,
                 rectangle
                     .fill
                     .as_deref()
                     .map(parse_color)
                     .unwrap_or(Color32::TRANSPARENT),
+                transform,
             );
             if let Some(stroke) = &rectangle.stroke {
-                painter.rect_stroke(
+                paint_transformed_rect_stroke(
+                    painter,
                     rect,
-                    CornerRadius::ZERO,
                     Stroke::new(
                         stroke.width.to_points().max(1.0),
                         parse_color(&stroke.color),
                     ),
-                    StrokeKind::Inside,
+                    line_dash(stroke.dash),
+                    transform,
                 );
             }
         }
-        Element::Image(image) => paint_placeholder(painter, rect, "IMAGE", &image.source),
-        Element::Svg(svg) => paint_placeholder(painter, rect, "VECTOR SVG", &svg.source),
-        Element::QrCode(_) => paint_qr_placeholder(painter, rect),
-        Element::Barcode(barcode) => paint_barcode_placeholder(painter, rect, &barcode.value),
-        Element::Group(_) => paint_placeholder(painter, rect, "GROUP", "composed elements"),
-        Element::Stack(_) => paint_placeholder(painter, rect, "FLOW STACK", "paginating region"),
-        Element::Table(table) => paint_placeholder(painter, rect, "TABLE", &table.source),
+        Element::Image(image) => {
+            paint_placeholder(painter, rect, "IMAGE", &image.source, Some(transform));
+        }
+        Element::Svg(svg) => {
+            paint_placeholder(painter, rect, "VECTOR SVG", &svg.source, Some(transform));
+        }
+        Element::QrCode(_) => paint_qr_placeholder(painter, rect, transform),
+        Element::Barcode(barcode) => {
+            paint_barcode_placeholder(painter, rect, &barcode.value, transform);
+        }
+        Element::Group(_) => paint_placeholder(painter, rect, "GROUP", "composed elements", None),
+        Element::Stack(_) => {
+            paint_placeholder(painter, rect, "FLOW STACK", "paginating region", None)
+        }
+        Element::Table(table) => paint_placeholder(painter, rect, "TABLE", &table.source, None),
         Element::Line(_) | Element::Repeater(_) | Element::PageBreak => {}
     }
 }
 
-fn paint_placeholder(painter: &egui::Painter, rect: Rect, title: &str, detail: &str) {
-    painter.rect_filled(
+fn paint_placeholder(
+    painter: &egui::Painter,
+    rect: Rect,
+    title: &str,
+    detail: &str,
+    transform: Option<ScreenTransform>,
+) {
+    let transform = transform.unwrap_or(ScreenTransform {
+        center: rect.center(),
+        angle: 0.0,
+    });
+    paint_transformed_rect(painter, rect, Color32::from_rgb(226, 228, 225), transform);
+    paint_transformed_rect_stroke(
+        painter,
         rect,
-        CornerRadius::same(2),
-        Color32::from_rgb(226, 228, 225),
-    );
-    painter.rect_stroke(
-        rect,
-        CornerRadius::same(2),
         Stroke::new(1.0_f32, Color32::from_rgb(165, 170, 168)),
-        StrokeKind::Inside,
+        LineDash::Solid,
+        transform,
     );
     painter.line_segment(
-        [rect.left_top(), rect.right_bottom()],
+        [
+            transform.point(rect.left_top()),
+            transform.point(rect.right_bottom()),
+        ],
         Stroke::new(1.0_f32, Color32::from_rgb(190, 194, 191)),
     );
     painter.line_segment(
-        [rect.right_top(), rect.left_bottom()],
+        [
+            transform.point(rect.right_top()),
+            transform.point(rect.left_bottom()),
+        ],
         Stroke::new(1.0_f32, Color32::from_rgb(190, 194, 191)),
     );
-    painter.text(
+    paint_rotated_centered_text(
+        painter,
         rect.center() - Vec2::new(0.0, 8.0),
-        Align2::CENTER_CENTER,
         title,
         FontId::proportional(12.0),
         CHARCOAL,
+        transform,
     );
-    painter.text(
+    paint_rotated_centered_text(
+        painter,
         rect.center() + Vec2::new(0.0, 10.0),
-        Align2::CENTER_CENTER,
         detail,
         FontId::proportional(9.0),
         Color32::from_gray(95),
+        transform,
     );
 }
 
-fn paint_qr_placeholder(painter: &egui::Painter, rect: Rect) {
-    painter.rect_filled(rect, CornerRadius::ZERO, Color32::WHITE);
+fn paint_rotated_centered_text(
+    painter: &egui::Painter,
+    center: Pos2,
+    value: &str,
+    font: FontId,
+    color: Color32,
+    transform: ScreenTransform,
+) {
+    let galley = painter.layout_no_wrap(value.to_owned(), font, color);
+    let top_left = center - galley.size() / 2.0;
+    painter.add(
+        egui::epaint::TextShape::new(transform.point(top_left), galley, color)
+            .with_angle(transform.angle),
+    );
+}
+
+fn paint_qr_placeholder(painter: &egui::Painter, rect: Rect, transform: ScreenTransform) {
+    paint_transformed_rect(painter, rect, Color32::WHITE, transform);
     let cells = 11;
     let size = rect.width().min(rect.height()) / cells as f32;
     let origin = rect.center() - Vec2::splat(size * cells as f32 / 2.0);
@@ -1903,26 +2247,33 @@ fn paint_qr_placeholder(painter: &egui::Painter, rect: Rect) {
         for x in 0..cells {
             let finder = ((x < 3 || x >= cells - 3) && y < 3) || (x < 3 && y >= cells - 3);
             if finder || (x * 3 + y * 5 + x * y) % 4 == 0 {
-                painter.rect_filled(
+                paint_transformed_rect(
+                    painter,
                     Rect::from_min_size(
                         origin + Vec2::new(x as f32 * size, y as f32 * size),
                         Vec2::splat(size + 0.2),
                     ),
-                    CornerRadius::ZERO,
                     CHARCOAL,
+                    transform,
                 );
             }
         }
     }
 }
 
-fn paint_barcode_placeholder(painter: &egui::Painter, rect: Rect, value: &str) {
-    painter.rect_filled(rect, CornerRadius::ZERO, Color32::WHITE);
+fn paint_barcode_placeholder(
+    painter: &egui::Painter,
+    rect: Rect,
+    value: &str,
+    transform: ScreenTransform,
+) {
+    paint_transformed_rect(painter, rect, Color32::WHITE, transform);
     let bars = 43;
     let bar_width = rect.width() / bars as f32;
     for index in 0..bars {
         if (index * 7 + 3) % 5 < 2 {
-            painter.rect_filled(
+            paint_transformed_rect(
+                painter,
                 Rect::from_min_max(
                     Pos2::new(rect.left() + index as f32 * bar_width, rect.top() + 5.0),
                     Pos2::new(
@@ -1930,17 +2281,18 @@ fn paint_barcode_placeholder(painter: &egui::Painter, rect: Rect, value: &str) {
                         rect.bottom() - 16.0,
                     ),
                 ),
-                CornerRadius::ZERO,
                 CHARCOAL,
+                transform,
             );
         }
     }
-    painter.text(
+    paint_rotated_centered_text(
+        painter,
         Pos2::new(rect.center().x, rect.bottom() - 8.0),
-        Align2::CENTER_CENTER,
         value,
         FontId::monospace(9.0),
         CHARCOAL,
+        transform,
     );
 }
 
@@ -2046,6 +2398,26 @@ fn element_properties(ui: &mut egui::Ui, element: &mut Element) -> bool {
                 changed |= compact_length(ui, "H", &mut bounds.height, "h");
                 ui.end_row();
             });
+        ui.add_space(12.0);
+    }
+    if let Some(mut rotation) = element_rotation(element) {
+        section_label(ui, "ROTATION");
+        let mut rotation_changed = false;
+        ui.horizontal(|ui| {
+            rotation_changed |= ui
+                .add(egui::DragValue::new(&mut rotation).speed(1.0).suffix("°"))
+                .changed();
+            for (label, value) in [("−90°", -90.0), ("0°", 0.0), ("+90°", 90.0)] {
+                if ui.small_button(label).clicked() {
+                    rotation = value;
+                    rotation_changed = true;
+                }
+            }
+        });
+        if rotation_changed {
+            set_element_rotation(element, rotation);
+            changed = true;
+        }
         ui.add_space(12.0);
     }
 
@@ -2458,13 +2830,14 @@ fn configure_style(ctx: &egui::Context) {
 mod tests {
     use std::path::PathBuf;
 
-    use eframe::egui::Color32;
+    use eframe::egui::{Color32, Pos2, Vec2};
     use print_forge_engine::DrawCommand;
     use print_forge_template::{Color as PrintColor, Element};
 
     use super::{
-        PreviewErrorCopy, first_template_variable, parse_color, preview_error_copy, print_color,
-        resolve_preview, rgb_hex, safe_stem, serialize_template,
+        PreviewErrorCopy, ScreenTransform, first_template_variable, inverse_rotate_vector,
+        parse_color, preview_error_copy, print_color, resolve_preview, rgb_hex, safe_stem,
+        serialize_template,
     };
     use crate::model::starter_template;
 
@@ -2540,6 +2913,21 @@ mod tests {
             parse_color("cmyk(100%, 0%, 0%, 0%)"),
             Color32::from_rgb(0, 255, 255)
         );
+    }
+
+    #[test]
+    fn canvas_rotation_and_resize_geometry_share_the_same_transform() {
+        let transform = ScreenTransform {
+            center: Pos2::new(10.0, 10.0),
+            angle: 90.0_f32.to_radians(),
+        };
+        let rotated = transform.point(Pos2::new(12.0, 10.0));
+        let local_delta = inverse_rotate_vector(Vec2::new(0.0, 2.0), transform.angle);
+
+        assert!((rotated.x - 10.0).abs() < 0.001);
+        assert!((rotated.y - 12.0).abs() < 0.001);
+        assert!((local_delta.x - 2.0).abs() < 0.001);
+        assert!(local_delta.y.abs() < 0.001);
     }
 
     #[test]

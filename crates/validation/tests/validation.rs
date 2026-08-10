@@ -136,6 +136,24 @@ fn rejects_invalid_element_dimensions_and_table_widths() {
 }
 
 #[test]
+fn rejects_non_finite_element_rotation() {
+    let mut invalid: Template =
+        serde_json::from_str(include_str!("../../../examples/business-card.json")).unwrap();
+    let print_forge_template::Element::Text(text) = &mut invalid.pages[0].elements[0] else {
+        panic!("fixture should start with text");
+    };
+    text.rotation = f32::NAN;
+
+    let report = validate_template(&invalid);
+    let diagnostic = report
+        .errors()
+        .find(|diagnostic| diagnostic.code == "element.invalid_rotation")
+        .unwrap();
+
+    assert_eq!(diagnostic.path, "pages[0].elements[0].rotation");
+}
+
+#[test]
 fn reports_empty_datasets_and_missing_required_fields_with_row_paths() {
     let template = template(
         r#"{
