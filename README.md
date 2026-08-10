@@ -4,7 +4,7 @@
 
 # Print Forge
 
-Print Forge is an early Rust workspace for data-driven print and PDF generation.
+Print Forge is a Rust workspace for data-driven print and PDF generation.
 The template and layout layers are deliberately independent from the PDF library
 so additional renderers can be added without changing the project format.
 
@@ -276,127 +276,90 @@ Benchmarks exercise 50,000-row CSV/JSON streams, 1,000-row table layout, and
 24-page image-heavy PDF rendering. CI runs formatting, Clippy, the full test
 suite, benchmark compilation, and representative PDF renders.
 
-## MVP roadmap
+## Project status and roadmap
 
-Work is ordered by product importance and implementation dependency. Complete
-each priority before moving to the next unless an item is clearly independent.
+Print Forge now has an end-to-end MVP: versioned JSON templates, CSV and JSON
+data, absolute and flow layout, pagination, tables, reusable groups and
+repeaters, SVG/QR/Code 128 elements, combined or per-record PDF jobs, print
+preflight, automation-safe CLI output, typed library boundaries, benchmarks,
+and CI. The earlier implementation checklist is intentionally not repeated
+here; Git history records that work better than a wall of completed boxes.
 
-### Completed foundation
+The roadmap below contains only unfinished work. Priorities favor a dependable
+`0.1` release before expanding the template language.
 
-- [x] Create the Rust workspace and renderer-independent crate boundaries.
-- [x] Define the versioned JSON template schema and physical measurement units.
-- [x] Load flat CSV datasets and nested JSON datasets.
-- [x] Resolve template variables, including dotted paths such as
-      `{{customer.name}}`.
-- [x] Lower absolute text, rectangle, and line elements into draw commands.
-- [x] Generate a valid PDF through the `printpdf` backend.
-- [x] Provide CLI commands for validation, dataset inspection, and rendering.
+### P0 — Ship a usable 0.1 release
 
-### 1. Make incorrect output difficult
+- [ ] Generate and publish a versioned JSON Schema plus a human-readable
+      template reference covering every field, element, default, constraint,
+      and unsupported combination, with a valid example for each element type.
+- [ ] Document the coordinate system, physical units, bleed and page boxes,
+      asset-path resolution, font selection, color handling, and pagination
+      rules in focused guides rather than only feature summaries.
+- [ ] Turn the existing fixtures into task-oriented recipes for business cards,
+      labels, invoices, product catalogs, and print-ready output, including the
+      expected command and result for each recipe.
+- [ ] Add release automation for versioned macOS, Linux, and Windows binaries,
+      checksums, release notes, and installation/upgrade instructions.
+- [ ] Define the compatibility contract for `schema_version`, CLI JSON output,
+      public Rust APIs, deprecations, and migrations before publishing them.
+- [ ] Add automated raster snapshots for representative PDFs so CI verifies
+      visual output, not only successful generation and PDF structure.
+- [ ] Cross-check representative PDF/X output with an independent preflight
+      tool or print workflow and document the supported profile assumptions and
+      known interoperability limits.
 
-- [x] Add semantic template validation for document sizes, page counts, element
-      bounds, font sizes, stroke widths, and table column widths.
-- [x] Validate the supported `schema_version` and report migration guidance for
-      incompatible templates.
-- [x] Validate required fields against the selected dataset before rendering.
-- [x] Include the dataset row, page, and element path in every rendering error.
-- [x] Detect elements outside the page or bleed area and report actionable
-      warnings.
-- [x] Add integration tests for malformed templates, missing variables, empty
-      datasets, and unsupported features.
+The `0.1` release is ready when a new user can install a binary, choose a
+documented example, validate it, render it, and compare the result without
+reading the Rust source.
 
-### 2. Finish the essential absolute-layout elements
+### P1 — Reliability and scale
 
-- [x] Add text measurement, wrapping, explicit line height, alignment, and
-      overflow policies (`clip`, `shrink`, and `error`).
-- [x] Load and embed external font files with regular, bold, italic, and
-      bold-italic variants.
-- [x] Render PNG and JPEG images from local paths.
-- [x] Implement image `contain`, `cover`, and `stretch` behavior with clipping.
-- [x] Resolve asset paths relative to the template file instead of the current
-      working directory.
-- [x] Add visual regression fixtures for text, images, rectangles, and lines.
+- [ ] Make PDF and summary writes atomic, and define cleanup behavior for
+      interrupted or partially successful per-record jobs.
+- [ ] Extend bounded-memory dataset processing to `validate` and
+      `inspect-data`; avoid the render command's current counting pass where a
+      single-pass job is possible.
+- [ ] Spool or incrementally assemble combined jobs so document size is not
+      limited by retaining every resolved page in memory.
+- [ ] Version the JSON result envelope and return diagnostics as structured
+      code/severity/path/message objects instead of flattening failures into one
+      error string.
+- [ ] Add configurable safety limits for rows, generated pages, asset sizes,
+      output bytes, and deeply nested input before accepting untrusted jobs.
+- [ ] Add fuzz and property tests for template parsing, variable resolution,
+      pagination, output-name sanitization, and malformed PDF preflight input.
+- [ ] Record benchmark baselines and fail CI on deliberate, stable regression
+      thresholds rather than compiling benchmarks without evaluating results.
 
-### 3. Support real variable-data jobs
+### P2 — Template-language depth
 
-- [x] Render every dataset row rather than only the first row.
-- [x] Support one combined multipage PDF and one-PDF-per-row output modes.
-- [x] Add collision-safe output naming from a field such as
-      `{{invoice_number}}`.
-- [x] Add row ranges, record limits, and `--continue-on-error` CLI options.
-- [x] Produce a machine-readable job summary containing successes, warnings,
-      failures, output paths, and elapsed time.
+These are post-MVP candidates. Their order should be driven by real document
+requests after `0.1`, not by implementing every desktop-publishing feature.
 
-### 4. Produce print-ready files
+- [ ] Add conditional visibility and explicit fallback/default values without
+      turning template expressions into an unrestricted scripting language.
+- [ ] Add named component definitions and local includes so repeated designs
+      can be reused across pages and templates without JSON duplication.
+- [ ] Improve international typography with shaping, font fallback, and clear
+      right-to-left and complex-script behavior.
+- [ ] Allow long flow text to split across pages while preserving widow/orphan
+      and keep-together guarantees.
+- [ ] Add practical table extensions such as footer rows, row groups,
+      subtotals, and per-column locale-aware formatting; keep nested tables and
+      arbitrary cell layout out of scope until there is a concrete use case.
+- [ ] Expand prepress controls with user-supplied ICC profiles, selectable
+      output intents, crop/registration marks, and spot-color support.
+- [ ] Add high-demand barcode formats such as EAN-13, UPC-A, and Data Matrix,
+      each with format-specific validation and scan-size preflight.
 
-- [x] Apply bleed to page geometry and expose trim, bleed, and media boxes.
-- [x] Add RGB and CMYK color models with strict color parsing.
-- [x] Add an image-resolution preflight with configurable minimum DPI.
-- [x] Verify that every required font is embedded before accepting a job.
-- [x] Define a PDF/X conformance target and validate generated files against it.
-- [x] Add document metadata and deterministic output for repeatable builds.
+### Roadmap rules
 
-### 5. Add flow layout and pagination
-
-- [x] Introduce a measure/layout contract for elements.
-- [x] Implement vertical and horizontal `stack` layout with gaps and padding.
-- [x] Allow absolute and flow-layout regions on the same page.
-- [x] Add automatic page creation and explicit page breaks.
-- [x] Add reusable page headers and footers.
-- [x] Define keep-together, orphan, and overflow behavior.
-
-### 6. Implement MVP tables
-
-- [x] Support fixed and percentage column widths.
-- [x] Support header rows, cell padding, borders, backgrounds, and text
-      alignment.
-- [x] Calculate row heights from wrapped cell contents.
-- [x] Split tables across pages and repeat the header row.
-- [x] Add per-column value formatting for numbers, currency, and dates.
-- [x] Explicitly reject merged cells, nested tables, and arbitrary cell layouts
-      for the MVP.
-
-### 7. Add reusable composition and repetition
-
-- [x] Implement groups with translated child coordinates.
-- [x] Implement repeaters over nested JSON arrays.
-- [x] Support vertical, horizontal, and grid repeater layouts.
-- [x] Add item-level variable scope while retaining access to root job data.
-- [x] Use repeaters to generate a label-sheet and a simple product-catalog
-      fixture.
-
-### 8. Add high-value specialty elements
-
-- [x] Render SVG assets while preserving vector output.
-- [x] Generate QR codes with configurable error correction and quiet zones.
-- [x] Add Code 128 barcode support for labels, tickets, and inventory use cases.
-- [x] Preflight barcode and QR dimensions for reliable scanning.
-
-### 9. Harden the CLI and library API
-
-- [x] Add structured exit codes and optional JSON output for automation.
-- [x] Add `--dry-run`, warning policies, and verbose diagnostic modes.
-- [x] Stream large datasets instead of loading every row into memory.
-- [x] Define stable public APIs for custom layout engines and renderers.
-- [x] Add benchmarks for large datasets, image-heavy pages, and long tables.
-- [x] Run formatting, Clippy, tests, and representative PDF renders in CI.
-
-### 10. Document and package the MVP
-
-- [ ] Publish a complete template-schema reference with working examples.
-- [ ] Document coordinate systems, units, asset resolution, and supported fonts.
-- [ ] Add end-to-end examples for business cards, labels, invoices, and product
-      sheets.
-- [ ] Document installation and release builds for macOS, Linux, and Windows.
-- [ ] Define the compatibility and migration policy for future schema versions.
-
-### MVP exit criteria
-
-- [ ] A user can validate a template and dataset before starting a job.
-- [ ] A user can generate business cards, labels, and multipage invoices from
-      CSV or JSON without editing Rust code.
-- [ ] Generated files pass the project's font, image-resolution, page-box, and
-      PDF-conformance preflight checks.
-- [ ] Failures identify the exact record and template element without silently
-      producing incomplete output.
-- [ ] The documented examples pass automated tests and visual PDF inspection.
+- Every feature ships with semantic validation, CLI and library tests, a
+  documented example, and a representative render fixture.
+- Correctness and actionable failures take precedence over silently accepting
+  unsupported layout behavior.
+- New schema features must state their pagination, composition, data-scope, and
+  compatibility behavior before implementation.
+- GUI authoring, remote asset fetching, arbitrary HTML/CSS rendering, and a
+  general-purpose expression language are not current roadmap commitments.
