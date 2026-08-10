@@ -19,8 +19,9 @@ use rfd::{FileDialog, MessageButtons, MessageDialog, MessageDialogResult, Messag
 use serde::{Deserialize, Serialize};
 
 use crate::model::{
-    ElementKind, blank_page, bounds_points, element_bounds, element_bounds_mut, element_label,
-    new_element, new_field, resize_element, starter_template, translate_element,
+    ElementKind, LineEndpoint, blank_page, bounds_points, element_bounds, element_bounds_mut,
+    element_label, new_element, new_field, resize_element, starter_template, translate_element,
+    translate_line_endpoint,
 };
 
 const APP_STATE_KEY: &str = "print-forge-studio-state";
@@ -823,6 +824,15 @@ impl StudioApp {
                             );
                             self.dirty = true;
                         }
+                        if let Some((endpoint, delta)) = interaction.line_endpoint {
+                            translate_line_endpoint(
+                                &mut self.template.pages[self.current_page].elements[index],
+                                endpoint,
+                                delta.x / scale,
+                                -delta.y / scale,
+                            );
+                            self.dirty = true;
+                        }
                     }
                 } else if let Err(error) = &preview {
                     paint_preview_error(&painter, page_rect, error);
@@ -1075,6 +1085,7 @@ struct ElementInteraction {
     clicked: bool,
     translate: Option<Vec2>,
     resize: Option<Vec2>,
+    line_endpoint: Option<(LineEndpoint, Vec2)>,
 }
 
 struct ElementPaintOptions {
@@ -1543,6 +1554,7 @@ fn paint_element(
         clicked: false,
         translate: None,
         resize: None,
+        line_endpoint: None,
     };
     if let Element::Line(line) = element {
         let start = page_point(page, scale, line.x1.to_points(), line.y1.to_points());
@@ -1560,8 +1572,8 @@ fn paint_element(
             Sense::click_and_drag(),
         );
         interaction.clicked = response.clicked();
-        if response.dragged() {
-            interaction.translate = Some(ui.input(|input| input.pointer.delta()));
+        if response.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
         }
         if options.selected {
             painter.rect_stroke(
@@ -1570,6 +1582,33 @@ fn paint_element(
                 Stroke::new(1.5_f32, ORANGE),
                 StrokeKind::Outside,
             );
+            for (endpoint, center) in [(LineEndpoint::Start, start), (LineEndpoint::End, end)] {
+                let handle = Rect::from_center_size(center, Vec2::splat(12.0));
+                painter.rect_filled(handle, CornerRadius::same(2), Color32::WHITE);
+                painter.rect_stroke(
+                    handle,
+                    CornerRadius::same(2),
+                    Stroke::new(2.0_f32, ORANGE),
+                    StrokeKind::Inside,
+                );
+                let endpoint_response = ui.interact(
+                    handle,
+                    Id::new(("canvas-line-endpoint", options.index, endpoint)),
+                    Sense::click_and_drag(),
+                );
+                interaction.clicked |= endpoint_response.clicked();
+                if endpoint_response.dragged() {
+                    interaction.line_endpoint =
+                        Some((endpoint, ui.input(|input| input.pointer.delta())));
+                    interaction.translate = None;
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+                } else if endpoint_response.hovered() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+                }
+            }
+        }
+        if interaction.line_endpoint.is_none() && response.dragged() {
+            interaction.translate = Some(ui.input(|input| input.pointer.delta()));
         }
         return interaction;
     }

@@ -16,6 +16,12 @@ pub enum ElementKind {
     Barcode,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum LineEndpoint {
+    Start,
+    End,
+}
+
 impl ElementKind {
     pub const ALL: [Self; 7] = [
         Self::Text,
@@ -218,6 +224,23 @@ pub fn translate_element(element: &mut Element, dx_points: f32, dy_points: f32) 
     }
 }
 
+pub fn translate_line_endpoint(
+    element: &mut Element,
+    endpoint: LineEndpoint,
+    dx_points: f32,
+    dy_points: f32,
+) {
+    let Element::Line(line) = element else {
+        return;
+    };
+    let (x, y) = match endpoint {
+        LineEndpoint::Start => (&mut line.x1, &mut line.y1),
+        LineEndpoint::End => (&mut line.x2, &mut line.y2),
+    };
+    add_points(x, dx_points);
+    add_points(y, dy_points);
+}
+
 pub fn resize_element(element: &mut Element, width_points: f32, height_points: f32) {
     if let Some(bounds) = element_bounds_mut(element) {
         set_points(&mut bounds.width, width_points.max(1.0));
@@ -261,11 +284,12 @@ fn truncate(value: &str, maximum: usize) -> String {
 
 #[cfg(test)]
 mod tests {
+    use print_forge_template::Element;
     use print_forge_validation::validate_template;
 
     use super::{
-        ElementKind, bounds_points, element_bounds, new_element, starter_template,
-        translate_element,
+        ElementKind, LineEndpoint, bounds_points, element_bounds, new_element, starter_template,
+        translate_element, translate_line_endpoint,
     };
 
     #[test]
@@ -288,5 +312,19 @@ mod tests {
                 assert_eq!(bounds[1], 625.0);
             }
         }
+    }
+
+    #[test]
+    fn line_endpoints_can_be_resized_independently() {
+        let mut line = new_element(ElementKind::Line, 0.0);
+        translate_line_endpoint(&mut line, LineEndpoint::End, 20.0, -10.0);
+        let Element::Line(line) = line else {
+            panic!("line palette element should remain a line");
+        };
+
+        assert_eq!(line.x1.to_points(), 54.0);
+        assert_eq!(line.y1.to_points(), 630.0);
+        assert_eq!(line.x2.to_points(), 294.0);
+        assert_eq!(line.y2.to_points(), 620.0);
     }
 }
