@@ -12,6 +12,7 @@ so additional renderers can be added without changing the project format.
 
 ```text
 apps/cli          Command-line entry point
+apps/studio       Native visual template builder
 crates/template   Serializable template schema
 crates/dataset    CSV and JSON dataset loading
 crates/engine     Renderer-neutral resolved document and draw commands
@@ -19,6 +20,24 @@ crates/pdf        PDF renderer boundary and printpdf adapter home
 crates/validation Semantic validation and preflight diagnostics
 examples          Example templates and data
 ```
+
+## Studio
+
+Print Forge Studio is a native desktop template builder that reads and writes
+the same versioned JSON used by the CLI. Launch it during development with:
+
+```sh
+cargo run -p print-forge-studio
+```
+
+The initial Studio supports native open/save dialogs, multipage projects,
+draggable and resizable page elements, a layer list, document and element
+inspectors, variable-field definitions, live semantic validation, raw JSON
+editing for advanced elements, preview data, and direct PDF rendering through
+the Print Forge layout and PDF crates. It currently provides dedicated visual
+controls for text, rectangles, lines, images, SVG, QR codes, and Code 128;
+imported tables, groups, stacks, and repeaters remain editable through the JSON
+view while their visual inspectors are developed.
 
 ## CLI
 
@@ -290,6 +309,10 @@ The roadmap below contains only unfinished work. Priorities favor a dependable
 
 ### P0 — Ship a usable 0.1 release
 
+- [ ] Make Print Forge Studio a supported no-code authoring path: add visual
+      inspectors for every MVP element, undo/redo, snapping and alignment,
+      asset/font management, representative data-row selection, and an exact
+      rendered-page preview; then include the desktop app in release packaging.
 - [ ] Generate and publish a versioned JSON Schema plus a human-readable
       template reference covering every field, element, default, constraint,
       and unsupported combination, with a valid example for each element type.

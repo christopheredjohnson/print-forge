@@ -1,0 +1,24 @@
+[package]
+name = "print-forge-studio"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "print-forge-studio"
+path = "src/main.rs"
+
+[dependencies]
+eframe.workspace = true
+print-forge-dataset.workspace = true
+print-forge-engine.workspace = true
+print-forge-pdf.workspace = true
+print-forge-template.workspace = true
+print-forge-validation.workspace = true
+rfd.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true
