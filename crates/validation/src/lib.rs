@@ -7,10 +7,12 @@ use print_forge_template::{
     Bounds, Color, DocumentMetadata, Element, Field, FieldType, FontFamily, Length, Page,
     StackDirection, StackElement, TableColumnWidth, TableElement, TableValueFormat, Template,
 };
+use serde::Serialize;
 
 pub const SUPPORTED_SCHEMA_VERSION: u32 = 1;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Severity {
     Error,
     Warning,
@@ -25,7 +27,7 @@ impl fmt::Display for Severity {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Diagnostic {
     pub severity: Severity,
     pub code: &'static str,
@@ -101,6 +103,11 @@ impl ValidationReport {
 
     fn append(&mut self, mut other: Self) {
         self.diagnostics.append(&mut other.diagnostics);
+    }
+
+    /// Appends diagnostics from another report while preserving their order.
+    pub fn extend(&mut self, other: Self) {
+        self.append(other);
     }
 }
 
@@ -1067,8 +1074,7 @@ fn validate_table(table: &TableElement, path: &str, report: &mut ValidationRepor
             "table.invalid_total_width",
             format!("{path}.columns"),
             format!(
-                "resolved table column widths must equal the {:.2}pt table width; found {:.2}pt",
-                table_width, resolved_width
+                "resolved table column widths must equal the {table_width:.2}pt table width; found {resolved_width:.2}pt"
             ),
         );
     }

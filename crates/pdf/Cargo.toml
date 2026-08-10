@@ -11,9 +11,14 @@ lopdf.workspace = true
 print-forge-engine.workspace = true
 print-forge-template.workspace = true
 printpdf.workspace = true
+thiserror.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true
 
 [lints]
 workspace = true
+
+[[bench]]
+name = "image_heavy_pages"
+harness = false

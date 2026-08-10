@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 print-forge-dataset.workspace = true
 print-forge-template.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]

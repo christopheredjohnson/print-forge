@@ -26,6 +26,14 @@ During development, run the CLI through Cargo as `cargo run -- <COMMAND>`.
 After installing the binary, use the equivalent `print-forge <COMMAND>` form.
 Every command supports `--help`; the root command also supports `--version`.
 
+### Global options
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `--json` | Off | Emit one machine-readable JSON document on stdout. |
+| `-v`, `--verbose` | Off | Include operational details and structured exit information; repeat for more detail. |
+| `--warnings <POLICY>` | `allow` | Use `allow`, `deny`, or `ignore` to control validation warnings. |
+
 ### Commands
 
 | Command | Usage | Purpose |
@@ -51,6 +59,7 @@ separate mode.
 | `--min-image-dpi <DPI>` | None | Reject images below the specified effective output resolution. |
 | `--require-embedded-fonts` | Off | Reject built-in PDF fonts and require embedded external fonts. |
 | `--pdf-x <x4>` | None | Generate and validate against the selected PDF/X target. |
+| `--dry-run` | Off | Validate, lay out, render, and preflight selected rows without writing files. |
 
 Separate-mode names are made filesystem-safe. Existing or duplicate names get
 a numeric suffix instead of being overwritten. `--print-ready` is the complete
@@ -68,10 +77,18 @@ cargo run -- render --help
 cargo run -- validate examples/business-card.json --dataset examples/people.csv
 cargo run -- inspect-data examples/people.csv
 
+# Get automation-safe output or reject every warning.
+cargo run -- --json validate examples/business-card.json --dataset examples/people.csv
+cargo run -- --warnings deny validate examples/business-card.json
+
 # Render every row into one combined PDF.
 cargo run -- render examples/business-card.json examples/people.csv \
   output/pdf/business-cards.pdf \
   --summary output/jobs/business-cards.json
+
+# Exercise the complete job without creating PDFs or summaries.
+cargo run -- --json render examples/business-card.json examples/people.csv \
+  output/pdf/business-cards.pdf --dry-run
 
 # Render selected rows into separate, safely named PDFs.
 cargo run -- render examples/business-card.json examples/people.csv \
@@ -216,13 +233,48 @@ pagination, translated groups, vertical/horizontal/grid repeaters, vector SVG,
 QR codes, and Code 128 barcodes. Asset paths are resolved relative to the
 template file.
 
+### Automation and exit codes
+
+`--json` reserves stdout for exactly one JSON document and suppresses text
+progress and diagnostics. Successful renders return the job summary. Failures
+return an object containing `status`, `exit_code`, and `error`.
+
+| Exit code | Meaning |
+| --- | --- |
+| `0` | Command completed successfully. |
+| `2` | CLI syntax or option parsing failed. |
+| `3` | A validation or inspection input could not be loaded, parsed, or validated. |
+| `4` | A render job, including its inputs, preflight, or output operation failed. |
+
+CSV and top-level JSON-array datasets are streamed during render jobs rather
+than retained as one in-memory dataset. Combined output still retains resolved
+pages until the final multipage PDF is assembled; separate mode keeps only the
+current row's document.
+
+## Library API
+
+The renderer-neutral `LayoutEngine` trait accepts `LayoutOptions`, and the
+`DocumentRenderer` trait returns the stable `PdfResult`/`PdfError` boundary.
+`PdfError` distinguishes preflight, rendering, and conformance failures. The
+dataset crate exposes `DatasetError`, `DatasetFormat`, `visit_path`,
+`visit_csv_reader`, and `visit_json_reader` for typed failures and bounded-memory
+row processing. Public error enums are non-exhaustive so new variants can be
+added compatibly.
+
 ## Development
+
+The workspace requires Rust 1.88 or newer.
 
 ```sh
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
+cargo bench --workspace --no-run
 ```
+
+Benchmarks exercise 50,000-row CSV/JSON streams, 1,000-row table layout, and
+24-page image-heavy PDF rendering. CI runs formatting, Clippy, the full test
+suite, benchmark compilation, and representative PDF renders.
 
 ## MVP roadmap
 
@@ -322,12 +374,12 @@ each priority before moving to the next unless an item is clearly independent.
 
 ### 9. Harden the CLI and library API
 
-- [ ] Add structured exit codes and optional JSON output for automation.
-- [ ] Add `--dry-run`, warning policies, and verbose diagnostic modes.
-- [ ] Stream large datasets instead of loading every row into memory.
-- [ ] Define stable public APIs for custom layout engines and renderers.
-- [ ] Add benchmarks for large datasets, image-heavy pages, and long tables.
-- [ ] Run formatting, Clippy, tests, and representative PDF renders in CI.
+- [x] Add structured exit codes and optional JSON output for automation.
+- [x] Add `--dry-run`, warning policies, and verbose diagnostic modes.
+- [x] Stream large datasets instead of loading every row into memory.
+- [x] Define stable public APIs for custom layout engines and renderers.
+- [x] Add benchmarks for large datasets, image-heavy pages, and long tables.
+- [x] Run formatting, Clippy, tests, and representative PDF renders in CI.
 
 ### 10. Document and package the MVP
 

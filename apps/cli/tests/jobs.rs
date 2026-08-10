@@ -111,6 +111,70 @@ fn combined_mode_renders_every_dataset_row() {
 }
 
 #[test]
+fn dry_run_preflights_all_rows_without_writing_files() {
+    let directory = TestDir::new("dry-run");
+    let template = directory.write("template.json", job_template());
+    let dataset = directory.write("dataset.json", r#"[{"name":"One"},{"name":"Two"}]"#);
+    let pdf = directory.path().join("output.pdf");
+    let summary = directory.path().join("summary.json");
+    let output = run(&[
+        "render",
+        template.to_str().unwrap(),
+        dataset.to_str().unwrap(),
+        pdf.to_str().unwrap(),
+        "--summary",
+        summary.to_str().unwrap(),
+        "--dry-run",
+    ]);
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!pdf.exists());
+    assert!(!summary.exists());
+    assert!(String::from_utf8_lossy(&output.stdout).contains("dry-run summary"));
+}
+
+#[test]
+fn render_json_output_is_single_document_and_job_failures_use_exit_code_four() {
+    let directory = TestDir::new("render-json");
+    let template = directory.write("template.json", job_template());
+    let dataset = directory.write("dataset.json", r#"[{"name":"One"}]"#);
+    let pdf = directory.path().join("output.pdf");
+    let output = run(&[
+        "--json",
+        "render",
+        template.to_str().unwrap(),
+        dataset.to_str().unwrap(),
+        pdf.to_str().unwrap(),
+        "--dry-run",
+    ]);
+    let payload: Value = serde_json::from_slice(&output.stdout).unwrap();
+
+    assert!(output.status.success());
+    assert_eq!(payload["status"], "succeeded");
+    assert_eq!(payload["selected_rows"], 1);
+    assert_eq!(payload["dry_run"], true);
+    assert!(output.stderr.is_empty());
+    assert!(!pdf.exists());
+
+    let invalid_dataset = directory.write("invalid.json", r#"[{"other":"missing"}]"#);
+    let failed = run(&[
+        "--json",
+        "render",
+        template.to_str().unwrap(),
+        invalid_dataset.to_str().unwrap(),
+        pdf.to_str().unwrap(),
+        "--dry-run",
+    ]);
+    let payload: Value = serde_json::from_slice(&failed.stdout).unwrap();
+    assert_eq!(failed.status.code(), Some(4));
+    assert_eq!(payload["exit_code"], 4);
+}
+
+#[test]
 fn separate_mode_uses_safe_collision_free_field_names_and_writes_summary() {
     let directory = TestDir::new("separate-job");
     let template = directory.write("template.json", job_template());

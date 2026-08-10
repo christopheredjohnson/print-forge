@@ -165,8 +165,18 @@ pub enum LineDash {
     Dotted,
 }
 
+/// Renderer-neutral layout boundary for applications that provide a custom engine.
 pub trait LayoutEngine {
     fn layout(&self, template: &Template, data: &DataRow) -> Result<ResolvedDocument, LayoutError>;
+
+    fn layout_with_options(
+        &self,
+        template: &Template,
+        data: &DataRow,
+        _options: &LayoutOptions,
+    ) -> Result<ResolvedDocument, LayoutError> {
+        self.layout(template, data)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -189,6 +199,15 @@ pub struct BasicLayoutEngine;
 impl LayoutEngine for BasicLayoutEngine {
     fn layout(&self, template: &Template, data: &DataRow) -> Result<ResolvedDocument, LayoutError> {
         self.layout_with_options(template, data, &LayoutOptions::default())
+    }
+
+    fn layout_with_options(
+        &self,
+        template: &Template,
+        data: &DataRow,
+        options: &LayoutOptions,
+    ) -> Result<ResolvedDocument, LayoutError> {
+        BasicLayoutEngine::layout_with_options(self, template, data, options)
     }
 }
 
@@ -940,8 +959,7 @@ fn layout_table(
     for (index, width) in column_widths.iter().enumerate() {
         if width - padding * 2.0 <= 0.0 {
             return Err(ElementLayoutError::InvalidLayout(format!(
-                "table column {index} is too narrow for {:.2}pt cell padding",
-                padding
+                "table column {index} is too narrow for {padding:.2}pt cell padding"
             )));
         }
     }
