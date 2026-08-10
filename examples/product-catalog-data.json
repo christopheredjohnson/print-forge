@@ -1,0 +1,14 @@
+[
+  {
+    "company": "Forge Supply Co.",
+    "catalog": {
+      "products": [
+        { "name": "Precision Registration Gauge", "description": "A compact alignment tool for repeatable press setup and proof inspection.", "price": "48.00" },
+        { "name": "Archival Sample Wallet", "description": "A durable organizer for paper, ink, coating, and finishing samples.", "price": "24.50" },
+        { "name": "Portable Color Reference", "description": "A field-ready reference for discussing process color and production intent.", "price": "79.00" },
+        { "name": "Finishing Notes Kit", "description": "Reusable job cards for documenting folds, cuts, binding, and packaging decisions.", "price": "18.75" },
+        { "name": "Press Check Clipboard", "description": "A rigid low-profile board designed for production-floor approvals.", "price": "36.00" }
+      ]
+    }
+  }
+]

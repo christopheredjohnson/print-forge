@@ -1,0 +1,155 @@
+{
+  "schema_version": 1,
+  "name": "Reusable product catalog",
+  "document": {
+    "width": { "value": 432, "unit": "points" },
+    "height": { "value": 360, "unit": "points" },
+    "metadata": {
+      "title": "Print Forge product-catalog fixture",
+      "author": "Print Forge"
+    }
+  },
+  "fields": [
+    { "name": "company", "field_type": "text", "required": true },
+    { "name": "catalog.products", "field_type": "collection", "required": true }
+  ],
+  "fonts": [
+    {
+      "name": "Helvetica",
+      "regular": "assets/fonts/Helvetica.ttf",
+      "bold": "assets/fonts/Helvetica-Bold.ttf"
+    }
+  ],
+  "pages": [
+    {
+      "header": [
+        {
+          "type": "text",
+          "position": {
+            "x": { "value": 36, "unit": "points" },
+            "y": { "value": 330, "unit": "points" },
+            "width": { "value": 360, "unit": "points" },
+            "height": { "value": 16, "unit": "points" }
+          },
+          "value": "{{company}} / PRODUCT CATALOG",
+          "font": "Helvetica",
+          "font_style": "bold",
+          "font_size": { "value": 11, "unit": "points" },
+          "color": "#16324F"
+        }
+      ],
+      "footer": [
+        {
+          "type": "text",
+          "position": {
+            "x": { "value": 36, "unit": "points" },
+            "y": { "value": 12, "unit": "points" },
+            "width": { "value": 360, "unit": "points" },
+            "height": { "value": 10, "unit": "points" }
+          },
+          "value": "Generated with Print Forge reusable composition",
+          "font": "Helvetica",
+          "font_size": { "value": 7, "unit": "points" },
+          "color": "#829AB1"
+        }
+      ],
+      "elements": [
+        {
+          "type": "repeater",
+          "source": "catalog.products",
+          "layout": "vertical",
+          "template": {
+            "type": "group",
+            "position": {
+              "x": { "value": 36, "unit": "points" },
+              "y": { "value": 228, "unit": "points" },
+              "width": { "value": 360, "unit": "points" },
+              "height": { "value": 90, "unit": "points" }
+            },
+            "children": [
+              {
+                "type": "rectangle",
+                "position": {
+                  "x": { "value": 0, "unit": "points" },
+                  "y": { "value": 0, "unit": "points" },
+                  "width": { "value": 360, "unit": "points" },
+                  "height": { "value": 78, "unit": "points" }
+                },
+                "fill": "#F0F4F8"
+              },
+              {
+                "type": "rectangle",
+                "position": {
+                  "x": { "value": 12, "unit": "points" },
+                  "y": { "value": 12, "unit": "points" },
+                  "width": { "value": 54, "unit": "points" },
+                  "height": { "value": 54, "unit": "points" }
+                },
+                "fill": "#2CB1BC"
+              },
+              {
+                "type": "text",
+                "position": {
+                  "x": { "value": 78, "unit": "points" },
+                  "y": { "value": 50, "unit": "points" },
+                  "width": { "value": 194, "unit": "points" },
+                  "height": { "value": 16, "unit": "points" }
+                },
+                "value": "{{name}}",
+                "font": "Helvetica",
+                "font_style": "bold",
+                "font_size": { "value": 11, "unit": "points" },
+                "overflow": "shrink",
+                "color": "#16324F"
+              },
+              {
+                "type": "text",
+                "position": {
+                  "x": { "value": 78, "unit": "points" },
+                  "y": { "value": 16, "unit": "points" },
+                  "width": { "value": 194, "unit": "points" },
+                  "height": { "value": 28, "unit": "points" }
+                },
+                "value": "{{description}}",
+                "font": "Helvetica",
+                "font_size": { "value": 8, "unit": "points" },
+                "line_height": { "value": 10, "unit": "points" },
+                "overflow": "shrink",
+                "color": "#486581"
+              },
+              {
+                "type": "text",
+                "position": {
+                  "x": { "value": 284, "unit": "points" },
+                  "y": { "value": 31, "unit": "points" },
+                  "width": { "value": 60, "unit": "points" },
+                  "height": { "value": 18, "unit": "points" }
+                },
+                "value": "${{price}}",
+                "font": "Helvetica",
+                "font_style": "bold",
+                "font_size": { "value": 12, "unit": "points" },
+                "align": "right",
+                "color": "#147D64"
+              },
+              {
+                "type": "text",
+                "position": {
+                  "x": { "value": 284, "unit": "points" },
+                  "y": { "value": 14, "unit": "points" },
+                  "width": { "value": 60, "unit": "points" },
+                  "height": { "value": 9, "unit": "points" }
+                },
+                "value": "ITEM {{index}}",
+                "font": "Helvetica",
+                "font_size": { "value": 6, "unit": "points" },
+                "align": "right",
+                "color": "#829AB1"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

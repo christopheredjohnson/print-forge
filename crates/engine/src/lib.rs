@@ -10,9 +10,9 @@ use std::{
 
 use print_forge_template::{
     BarcodeElement, BarcodeFormat, Color, DashStyle, DocumentMetadata, Element, FlowOverflow,
-    FontFamily, FontStyle, ImageFit, QrCodeElement, QrErrorCorrection, StackDirection,
-    StackElement, Stroke, TableColumnWidth, TableDateStyle, TableElement, TableValueFormat,
-    Template, TextAlign, TextOverflow,
+    FontFamily, FontStyle, GroupElement, ImageFit, QrCodeElement, QrErrorCorrection, RepeatLayout,
+    RepeaterElement, StackDirection, StackElement, Stroke, TableColumnWidth, TableDateStyle,
+    TableElement, TableValueFormat, Template, TextAlign, TextOverflow,
 };
 use thiserror::Error;
 
@@ -279,6 +279,39 @@ fn layout_template_page(
                         .extend(commands);
                 }
             }
+            Element::Group(group) => {
+                let commands = layout_group(group, None, &source_path, template, data, options)
+                    .map_err(|source| layout_error(page_index, &source_path, source))?;
+                pages
+                    .last_mut()
+                    .expect("page exists")
+                    .commands
+                    .extend(commands);
+            }
+            Element::Repeater(repeater) => {
+                let repeat_pages = layout_repeater(
+                    repeater,
+                    &source_path,
+                    template,
+                    data,
+                    options,
+                    template.document.width.to_points(),
+                    template.document.height.to_points(),
+                )
+                .map_err(|source| layout_error(page_index, &source_path, source))?;
+                for (continuation, commands) in repeat_pages.into_iter().enumerate() {
+                    if continuation > 0 {
+                        pages.push(ResolvedPage {
+                            commands: repeating.clone(),
+                        });
+                    }
+                    pages
+                        .last_mut()
+                        .expect("page exists")
+                        .commands
+                        .extend(commands);
+                }
+            }
             _ => {
                 let command = layout_element_at(element, None, template, data, options)
                     .map_err(|source| layout_error(page_index, &source_path, source))?;
@@ -334,6 +367,34 @@ fn layout_repeating_elements(
                     }
                     commands.append(&mut flow_pages[0]);
                 }
+                Element::Group(group) => {
+                    commands.extend(
+                        layout_group(group, None, &source_path, template, data, options)
+                            .map_err(|source| layout_error(page_index, &source_path, source))?,
+                    );
+                }
+                Element::Repeater(repeater) => {
+                    let mut repeat_pages = layout_repeater(
+                        repeater,
+                        &source_path,
+                        template,
+                        data,
+                        options,
+                        template.document.width.to_points(),
+                        template.document.height.to_points(),
+                    )
+                    .map_err(|source| layout_error(page_index, &source_path, source))?;
+                    if repeat_pages.len() != 1 {
+                        return Err(layout_error(
+                            page_index,
+                            &source_path,
+                            ElementLayoutError::InvalidLayout(
+                                "repeaters in headers and footers cannot paginate".to_owned(),
+                            ),
+                        ));
+                    }
+                    commands.append(&mut repeat_pages[0]);
+                }
                 _ => {
                     let command = layout_element_at(element, None, template, data, options)
                         .map_err(|source| layout_error(page_index, &source_path, source))?;
@@ -353,6 +414,269 @@ fn layout_error(page_index: usize, element_path: &str, source: ElementLayoutErro
         page_index,
         element_path: element_path.to_owned(),
         source,
+    }
+}
+
+fn layout_group(
+    group: &GroupElement,
+    assigned_bounds: Option<Rect>,
+    source_path: &str,
+    template: &Template,
+    data: &DataRow,
+    options: &LayoutOptions,
+) -> Result<Vec<ResolvedCommand>, ElementLayoutError> {
+    let group_bounds = assigned_bounds
+        .or_else(|| group.position.as_ref().map(resolve_bounds))
+        .unwrap_or(Rect {
+            x: 0.0,
+            y: 0.0,
+            width: template.document.width.to_points(),
+            height: template.document.height.to_points(),
+        });
+    validate_flow_rect(group_bounds, "group bounds")?;
+
+    let mut commands = Vec::new();
+    for (index, child) in group.children.iter().enumerate() {
+        let child_path = format!("{source_path}.children[{index}]");
+        let child_commands = match child {
+            Element::Group(nested) => {
+                let bounds = nested
+                    .position
+                    .as_ref()
+                    .map(|position| translate_bounds(resolve_bounds(position), group_bounds))
+                    .unwrap_or(group_bounds);
+                layout_group(
+                    nested,
+                    Some(bounds),
+                    &child_path,
+                    template,
+                    data,
+                    options,
+                )
+            }
+            Element::Stack(stack) => {
+                let bounds = stack
+                    .position
+                    .as_ref()
+                    .map(|position| translate_bounds(resolve_bounds(position), group_bounds))
+                    .ok_or_else(|| missing_position("stack"))?;
+                layout_stack_in_bounds(
+                    stack,
+                    bounds,
+                    &child_path,
+                    template,
+                    data,
+                    options,
+                )
+            }
+            Element::Line(line) => Ok(vec![ResolvedCommand {
+                source_path: child_path.clone(),
+                command: DrawCommand::Line(LineCommand {
+                    start: Point {
+                        x: group_bounds.x + line.x1.to_points(),
+                        y: group_bounds.y + line.y1.to_points(),
+                    },
+                    end: Point {
+                        x: group_bounds.x + line.x2.to_points(),
+                        y: group_bounds.y + line.y2.to_points(),
+                    },
+                    width_pt: line.width.to_points(),
+                    color: resolve_color(&line.color)?,
+                    dash: resolve_dash(line.dash),
+                }),
+            }]),
+            Element::Table(_) => Err(ElementLayoutError::InvalidLayout(
+                "MVP tables must be positioned top-level page elements".to_owned(),
+            )),
+            Element::Repeater(_) => Err(ElementLayoutError::InvalidLayout(
+                "nested repeaters are not supported; use a dotted source path for nested JSON arrays"
+                    .to_owned(),
+            )),
+            Element::PageBreak => Err(ElementLayoutError::InvalidLayout(
+                "page breaks are not allowed inside groups".to_owned(),
+            )),
+            _ => {
+                let bounds = element_bounds(child)
+                    .map(|position| translate_bounds(resolve_bounds(position), group_bounds))
+                    .ok_or_else(|| {
+                        ElementLayoutError::InvalidLayout(
+                            "group children require a position".to_owned(),
+                        )
+                    })?;
+                Ok(vec![ResolvedCommand {
+                    source_path: child_path.clone(),
+                    command: layout_element_at(child, Some(bounds), template, data, options)?,
+                }])
+            }
+        }
+        .map_err(|source| nested_layout_error(&child_path, source))?;
+        commands.extend(child_commands);
+    }
+
+    Ok(commands)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn layout_repeater(
+    repeater: &RepeaterElement,
+    source_path: &str,
+    template: &Template,
+    data: &DataRow,
+    options: &LayoutOptions,
+    page_width: f32,
+    page_height: f32,
+) -> Result<Vec<Vec<ResolvedCommand>>, ElementLayoutError> {
+    let value = lookup_value(data, &repeater.source)
+        .ok_or_else(|| ElementLayoutError::MissingVariable(repeater.source.clone()))?;
+    let items = value.as_array().ok_or_else(|| {
+        ElementLayoutError::InvalidLayout(format!(
+            "repeater source {:?} must resolve to an array",
+            repeater.source
+        ))
+    })?;
+
+    let start = element_bounds(&repeater.template)
+        .map(resolve_bounds)
+        .ok_or_else(|| {
+            ElementLayoutError::InvalidLayout(
+                "repeater template requires position bounds that define the first item slot"
+                    .to_owned(),
+            )
+        })?;
+    validate_flow_rect(start, "repeater item bounds")?;
+    if start.x < 0.0
+        || start.y < 0.0
+        || start.x + start.width > page_width + 0.01
+        || start.y + start.height > page_height + 0.01
+    {
+        return Err(ElementLayoutError::InvalidLayout(
+            "repeater template's first item slot must fit inside the page".to_owned(),
+        ));
+    }
+
+    let columns = ((page_width - start.x) / start.width).floor() as usize;
+    let rows = ((start.y + start.height) / start.height).floor() as usize;
+    let (columns, rows) = match repeater.layout {
+        RepeatLayout::Vertical => (1, rows),
+        RepeatLayout::Horizontal => (columns, 1),
+        RepeatLayout::Grid => (columns, rows),
+    };
+    if columns == 0 || rows == 0 {
+        return Err(ElementLayoutError::InvalidLayout(
+            "repeater item bounds leave no usable slots on the page".to_owned(),
+        ));
+    }
+    let capacity = columns.checked_mul(rows).ok_or_else(|| {
+        ElementLayoutError::InvalidLayout("repeater page capacity is too large".to_owned())
+    })?;
+
+    let mut pages = vec![Vec::new()];
+    for (item_index, item) in items.iter().enumerate() {
+        let page_index = item_index / capacity;
+        while pages.len() <= page_index {
+            pages.push(Vec::new());
+        }
+        let slot = item_index % capacity;
+        let column = slot % columns;
+        let row = slot / columns;
+        let bounds = Rect {
+            x: start.x + column as f32 * start.width,
+            y: start.y - row as f32 * start.height,
+            width: start.width,
+            height: start.height,
+        };
+        let item_path = format!("{source_path}.items[{item_index}].template");
+        let scope = repeat_item_scope(data, item, item_index);
+        pages[page_index].extend(
+            layout_repeated_element(
+                &repeater.template,
+                bounds,
+                &item_path,
+                template,
+                &scope,
+                options,
+            )
+            .map_err(|source| nested_layout_error(&item_path, source))?,
+        );
+    }
+
+    Ok(pages)
+}
+
+fn layout_repeated_element(
+    element: &Element,
+    bounds: Rect,
+    source_path: &str,
+    template: &Template,
+    data: &DataRow,
+    options: &LayoutOptions,
+) -> Result<Vec<ResolvedCommand>, ElementLayoutError> {
+    match element {
+        Element::Group(group) => {
+            layout_group(group, Some(bounds), source_path, template, data, options)
+        }
+        Element::Stack(stack) => {
+            layout_stack_in_bounds(stack, bounds, source_path, template, data, options)
+        }
+        Element::Line(_) | Element::Table(_) | Element::Repeater(_) | Element::PageBreak => {
+            Err(ElementLayoutError::InvalidLayout(
+                "repeater templates must be positioned text, image, rectangle, SVG, QR code, group, or stack elements"
+                    .to_owned(),
+            ))
+        }
+        _ => Ok(vec![ResolvedCommand {
+            source_path: source_path.to_owned(),
+            command: layout_element_at(element, Some(bounds), template, data, options)?,
+        }]),
+    }
+}
+
+fn repeat_item_scope(data: &DataRow, item: &serde_json::Value, item_index: usize) -> DataRow {
+    let root = data
+        .get("root")
+        .and_then(serde_json::Value::as_object)
+        .cloned()
+        .unwrap_or_else(|| data.clone());
+    let mut scope = root.clone();
+    if let Some(object) = item.as_object() {
+        scope.extend(object.clone());
+    }
+    scope.insert("root".to_owned(), serde_json::Value::Object(root));
+    scope.insert("item".to_owned(), item.clone());
+    scope.insert(
+        "index".to_owned(),
+        serde_json::Value::Number(serde_json::Number::from(item_index + 1)),
+    );
+    scope
+}
+
+fn element_bounds(element: &Element) -> Option<&print_forge_template::Bounds> {
+    match element {
+        Element::Text(element) => element.position.as_ref(),
+        Element::Image(element) => element.position.as_ref(),
+        Element::Rectangle(element) => element.position.as_ref(),
+        Element::Svg(element) => element.position.as_ref(),
+        Element::QrCode(element) => element.position.as_ref(),
+        Element::Barcode(element) => element.position.as_ref(),
+        Element::Group(element) => element.position.as_ref(),
+        Element::Stack(element) => element.position.as_ref(),
+        Element::Table(element) => element.position.as_ref(),
+        Element::Line(_) | Element::Repeater(_) | Element::PageBreak => None,
+    }
+}
+
+fn translate_bounds(bounds: Rect, parent: Rect) -> Rect {
+    Rect {
+        x: parent.x + bounds.x,
+        y: parent.y + bounds.y,
+        ..bounds
+    }
+}
+
+fn nested_layout_error(element_path: &str, source: ElementLayoutError) -> ElementLayoutError {
+    ElementLayoutError::Nested {
+        element_path: element_path.to_owned(),
+        source: Box::new(source),
     }
 }
 
@@ -1208,7 +1532,11 @@ fn measure_element(
         Element::Line(_) => Err(ElementLayoutError::InvalidLayout(
             "line elements use absolute coordinates and cannot be flow children".to_owned(),
         )),
-        Element::Group(_) => Err(ElementLayoutError::UnsupportedElement("group")),
+        Element::Group(group) => group
+            .position
+            .as_ref()
+            .map(measured_bounds)
+            .ok_or_else(|| flow_size_hint_missing("group")),
         Element::Table(_) => Err(ElementLayoutError::InvalidLayout(
             "MVP tables must be positioned top-level page elements".to_owned(),
         )),
@@ -1292,8 +1620,14 @@ fn layout_flow_element(
     data: &DataRow,
     options: &LayoutOptions,
 ) -> Result<Vec<ResolvedCommand>, ElementLayoutError> {
-    if let Element::Stack(stack) = element {
-        return layout_stack_in_bounds(stack, bounds, source_path, template, data, options);
+    match element {
+        Element::Stack(stack) => {
+            return layout_stack_in_bounds(stack, bounds, source_path, template, data, options);
+        }
+        Element::Group(group) => {
+            return layout_group(group, Some(bounds), source_path, template, data, options);
+        }
+        _ => {}
     }
     let command = layout_element_at(element, Some(bounds), template, data, options)?;
     Ok(vec![ResolvedCommand {
@@ -2058,6 +2392,12 @@ pub enum ElementLayoutError {
     InvalidLayout(String),
     #[error("layout feature is not implemented: {0}")]
     UnsupportedFeature(String),
+    #[error("element {element_path}: {source}")]
+    Nested {
+        element_path: String,
+        #[source]
+        source: Box<ElementLayoutError>,
+    },
 }
 
 #[cfg(test)]
@@ -2601,6 +2941,231 @@ mod tests {
         qr_code.position.as_mut().unwrap().height.value = 10.0;
         let error = BasicLayoutEngine.layout(&too_small, &data).unwrap_err();
         assert!(error.to_string().contains("module size"));
+    }
+
+    #[test]
+    fn translates_group_children_and_nested_groups() {
+        let template: Template = serde_json::from_str(
+            r##"{
+              "name": "Translated groups",
+              "document": {
+                "width": { "value": 200, "unit": "points" },
+                "height": { "value": 200, "unit": "points" }
+              },
+              "pages": [{ "elements": [{
+                "type": "group",
+                "position": {
+                  "x": { "value": 20, "unit": "points" },
+                  "y": { "value": 30, "unit": "points" },
+                  "width": { "value": 100, "unit": "points" },
+                  "height": { "value": 100, "unit": "points" }
+                },
+                "children": [
+                  {
+                    "type": "rectangle",
+                    "position": {
+                      "x": { "value": 5, "unit": "points" },
+                      "y": { "value": 7, "unit": "points" },
+                      "width": { "value": 20, "unit": "points" },
+                      "height": { "value": 10, "unit": "points" }
+                    },
+                    "fill": "#112233"
+                  },
+                  {
+                    "type": "group",
+                    "position": {
+                      "x": { "value": 40, "unit": "points" },
+                      "y": { "value": 50, "unit": "points" },
+                      "width": { "value": 40, "unit": "points" },
+                      "height": { "value": 40, "unit": "points" }
+                    },
+                    "children": [{
+                      "type": "line",
+                      "x1": { "value": 1, "unit": "points" },
+                      "y1": { "value": 2, "unit": "points" },
+                      "x2": { "value": 11, "unit": "points" },
+                      "y2": { "value": 12, "unit": "points" },
+                      "width": { "value": 1, "unit": "points" }
+                    }]
+                  }
+                ]
+              }] }]
+            }"##,
+        )
+        .unwrap();
+
+        let document = BasicLayoutEngine
+            .layout(&template, &DataRow::new())
+            .unwrap();
+        let DrawCommand::Rectangle(rectangle) = &document.pages[0].commands[0].command else {
+            panic!("expected rectangle");
+        };
+        assert_eq!(rectangle.bounds.x, 25.0);
+        assert_eq!(rectangle.bounds.y, 37.0);
+        let DrawCommand::Line(line) = &document.pages[0].commands[1].command else {
+            panic!("expected line");
+        };
+        assert_eq!(line.start, super::Point { x: 61.0, y: 82.0 });
+        assert_eq!(line.end, super::Point { x: 71.0, y: 92.0 });
+    }
+
+    #[test]
+    fn repeats_grid_items_with_item_and_root_scope_across_pages() {
+        let template: Template = serde_json::from_str(
+            r##"{
+              "name": "Grid repeater",
+              "document": {
+                "width": { "value": 100, "unit": "points" },
+                "height": { "value": 100, "unit": "points" }
+              },
+              "pages": [{ "elements": [{
+                "type": "repeater",
+                "source": "catalog.products",
+                "layout": "grid",
+                "template": {
+                  "type": "group",
+                  "position": {
+                    "x": { "value": 10, "unit": "points" },
+                    "y": { "value": 60, "unit": "points" },
+                    "width": { "value": 30, "unit": "points" },
+                    "height": { "value": 30, "unit": "points" }
+                  },
+                  "children": [
+                    {
+                      "type": "rectangle",
+                      "position": {
+                        "x": { "value": 2, "unit": "points" },
+                        "y": { "value": 3, "unit": "points" },
+                        "width": { "value": 26, "unit": "points" },
+                        "height": { "value": 24, "unit": "points" }
+                      },
+                      "fill": "#EEEEEE"
+                    },
+                    {
+                      "type": "text",
+                      "position": {
+                        "x": { "value": 2, "unit": "points" },
+                        "y": { "value": 8, "unit": "points" },
+                        "width": { "value": 26, "unit": "points" },
+                        "height": { "value": 10, "unit": "points" }
+                      },
+                      "value": "{{name}}-{{root.batch}}-{{index}}",
+                      "font_size": { "value": 5, "unit": "points" },
+                      "overflow": "shrink"
+                    }
+                  ]
+                }
+              }] }]
+            }"##,
+        )
+        .unwrap();
+        let products = (0..10)
+            .map(|index| json!({ "name": format!("P{index}") }))
+            .collect::<Vec<_>>();
+        let data: DataRow = serde_json::from_value(json!({
+            "batch": "R",
+            "catalog": { "products": products }
+        }))
+        .unwrap();
+
+        let document = BasicLayoutEngine.layout(&template, &data).unwrap();
+        assert_eq!(document.pages.len(), 2);
+        let rectangles = document.pages[0]
+            .commands
+            .iter()
+            .filter_map(|command| match &command.command {
+                DrawCommand::Rectangle(rectangle) => Some(rectangle.bounds),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(rectangles.len(), 9);
+        assert_eq!((rectangles[0].x, rectangles[0].y), (12.0, 63.0));
+        assert_eq!((rectangles[1].x, rectangles[1].y), (42.0, 63.0));
+        assert_eq!((rectangles[3].x, rectangles[3].y), (12.0, 33.0));
+
+        let DrawCommand::Text(first_text) = &document.pages[0].commands[1].command else {
+            panic!("expected text");
+        };
+        assert_eq!(first_text.lines[0].value, "P0-R-1");
+        let DrawCommand::Text(last_text) = &document.pages[1].commands[1].command else {
+            panic!("expected text");
+        };
+        assert_eq!(last_text.lines[0].value, "P9-R-10");
+    }
+
+    #[test]
+    fn supports_vertical_and_horizontal_repeater_layouts() {
+        for (layout, expected_second, expected_pages) in [
+            ("vertical", (10.0, 30.0), 2),
+            ("horizontal", (40.0, 60.0), 2),
+        ] {
+            let source = format!(
+                r##"{{
+                  "name": "{layout} repeater",
+                  "document": {{
+                    "width": {{ "value": 70, "unit": "points" }},
+                    "height": {{ "value": 90, "unit": "points" }}
+                  }},
+                  "pages": [{{ "elements": [{{
+                    "type": "repeater",
+                    "source": "items",
+                    "layout": "{layout}",
+                    "template": {{
+                      "type": "rectangle",
+                      "position": {{
+                        "x": {{ "value": 10, "unit": "points" }},
+                        "y": {{ "value": 60, "unit": "points" }},
+                        "width": {{ "value": 30, "unit": "points" }},
+                        "height": {{ "value": 30, "unit": "points" }}
+                      }},
+                      "fill": "#000000"
+                    }}
+                  }}] }}]
+                }}"##
+            );
+            let template: Template = serde_json::from_str(&source).unwrap();
+            let data: DataRow = serde_json::from_value(json!({ "items": [1, 2, 3, 4] })).unwrap();
+            let document = BasicLayoutEngine.layout(&template, &data).unwrap();
+            assert_eq!(document.pages.len(), expected_pages);
+            let DrawCommand::Rectangle(second) = &document.pages[0].commands[1].command else {
+                panic!("expected rectangle");
+            };
+            assert_eq!((second.bounds.x, second.bounds.y), expected_second);
+        }
+    }
+
+    #[test]
+    fn product_catalog_continuation_retains_composition_and_page_furniture() {
+        let template: Template =
+            serde_json::from_str(include_str!("../../../examples/product-catalog.json")).unwrap();
+        let rows = serde_json::from_str::<Vec<serde_json::Value>>(include_str!(
+            "../../../examples/product-catalog-data.json"
+        ))
+        .unwrap();
+        let data = rows[0].as_object().unwrap().clone();
+        let asset_base = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples");
+
+        let document = BasicLayoutEngine
+            .layout_with_options(&template, &data, &LayoutOptions { asset_base })
+            .unwrap();
+
+        assert_eq!(document.pages.len(), 2);
+        assert_eq!(document.pages[0].commands.len(), 20);
+        assert_eq!(document.pages[1].commands.len(), 14);
+        assert!(document.pages[1].commands.iter().any(|command| {
+            command.source_path == "pages[0].header[0]"
+                && matches!(command.command, DrawCommand::Text(_))
+        }));
+        assert!(document.pages[1].commands.iter().any(|command| {
+            command
+                .source_path
+                .ends_with("items[3].template.children[0]")
+                && matches!(command.command, DrawCommand::Rectangle(_))
+        }));
+        assert!(document.pages[1].commands.iter().any(|command| {
+            command.source_path == "pages[0].footer[0]"
+                && matches!(command.command, DrawCommand::Text(_))
+        }));
     }
 
     #[test]

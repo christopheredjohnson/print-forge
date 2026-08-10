@@ -98,6 +98,14 @@ cargo run -- render examples/table-invoice.json examples/table-invoice-data.json
 cargo run -- render examples/specialty-elements.json \
   examples/specialty-elements-data.json \
   output/pdf/specialty-elements.pdf
+
+# Render reusable groups as a repeated label grid.
+cargo run -- render examples/label-sheet.json examples/label-sheet-data.json \
+  output/pdf/label-sheet.pdf
+
+# Render a nested product array as a paginated catalog.
+cargo run -- render examples/product-catalog.json examples/product-catalog-data.json \
+  output/pdf/product-catalog.pdf
 ```
 
 ## Output and template behavior
@@ -179,11 +187,34 @@ bounds, and Code 128 bars shorter than 14.4pt. Payload-dependent module width
 is checked after template variables resolve, so long values cannot silently
 produce an unreadably dense symbol.
 
+### Reusable composition and repetition
+
+A positioned `group` is a reusable local coordinate system. Child coordinates
+are relative to the group's lower-left origin, so moving the group translates
+all of its text, images, rectangles, lines, nested groups, and non-paginating
+stacks together. A group used as a flow child requires position width and
+height as its size hint.
+
+A top-level `repeater` resolves its dotted `source` path to a JSON array and
+copies one positioned template for each item. The template's position defines
+the first slot and its width and height define the repeating step. `vertical`
+fills downward, `horizontal` fills to the right, and `grid` fills rows from
+left to right before moving downward. When no more complete slots fit on the
+page, Print Forge creates a continuation page and repeats that template page's
+header and footer.
+
+Object fields in the current item are available directly, such as `{{name}}`.
+The same value is always available under `{{item.name}}`, `{{index}}` is the
+one-based item number, and original job data remains available under paths such
+as `{{root.customer.name}}`. Scalar array items are available as `{{item}}`.
+Repeaters currently remain top-level elements, and repeated templates cannot
+contain tables, page breaks, or nested repeaters.
+
 The current renderer supports measured and wrapped text, embedded font
 families, local PNG/JPEG images, rectangles, lines, stacks, tables, and
-pagination, vector SVG, QR codes, and Code 128 barcodes. Asset paths are
-resolved relative to the template file. Groups and repeaters remain explicit
-implementation errors.
+pagination, translated groups, vertical/horizontal/grid repeaters, vector SVG,
+QR codes, and Code 128 barcodes. Asset paths are resolved relative to the
+template file.
 
 ## Development
 
@@ -275,11 +306,11 @@ each priority before moving to the next unless an item is clearly independent.
 
 ### 7. Add reusable composition and repetition
 
-- [ ] Implement groups with translated child coordinates.
-- [ ] Implement repeaters over nested JSON arrays.
-- [ ] Support vertical, horizontal, and grid repeater layouts.
-- [ ] Add item-level variable scope while retaining access to root job data.
-- [ ] Use repeaters to generate a label-sheet and a simple product-catalog
+- [x] Implement groups with translated child coordinates.
+- [x] Implement repeaters over nested JSON arrays.
+- [x] Support vertical, horizontal, and grid repeater layouts.
+- [x] Add item-level variable scope while retaining access to root job data.
+- [x] Use repeaters to generate a label-sheet and a simple product-catalog
       fixture.
 
 ### 8. Add high-value specialty elements

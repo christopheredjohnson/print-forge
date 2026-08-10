@@ -394,6 +394,60 @@ fn validates_specialty_element_scan_constraints() {
 }
 
 #[test]
+fn validates_repeater_sources_and_nested_item_table_data() {
+    let template = template(
+        r##"{
+          "name": "Repeated items",
+          "document": {
+            "width": { "value": 200, "unit": "points" },
+            "height": { "value": 200, "unit": "points" }
+          },
+          "pages": [{ "elements": [{
+            "type": "repeater",
+            "source": "catalog.sections",
+            "layout": "vertical",
+            "template": {
+              "type": "group",
+              "position": {
+                "x": { "value": 10, "unit": "points" },
+                "y": { "value": 110, "unit": "points" },
+                "width": { "value": 180, "unit": "points" },
+                "height": { "value": 80, "unit": "points" }
+              },
+              "children": [{
+                "type": "text",
+                "position": {
+                  "x": { "value": 5, "unit": "points" },
+                  "y": { "value": 5, "unit": "points" },
+                  "width": { "value": 170, "unit": "points" },
+                  "height": { "value": 20, "unit": "points" }
+                },
+                "value": "{{name}} / {{root.company}} / {{index}}",
+                "font_size": { "value": 10, "unit": "points" }
+              }]
+            }
+          }] }]
+        }"##,
+    );
+    let valid = Dataset::from_json_reader(
+        r#"[{"company":"Forge","catalog":{"sections":[{"name":"One"}]}}]"#.as_bytes(),
+    )
+    .unwrap();
+    assert!(validate_job(&template, &valid).is_valid());
+
+    let invalid = Dataset::from_json_reader(
+        r#"[{"company":"Forge","catalog":{"sections":{"name":"One"}}}]"#.as_bytes(),
+    )
+    .unwrap();
+    let report = validate_job(&template, &invalid);
+    let diagnostic = report
+        .errors()
+        .find(|diagnostic| diagnostic.code == "repeater.invalid_source")
+        .unwrap();
+    assert_eq!(diagnostic.path, "rows[0].catalog.sections");
+}
+
+#[test]
 fn accepts_mixed_width_tables_and_scalar_formatted_cells() {
     let template = template(
         r##"{
