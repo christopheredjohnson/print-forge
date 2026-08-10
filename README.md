@@ -34,10 +34,15 @@ The initial Studio supports native open/save dialogs, multipage projects,
 draggable and resizable page elements, a layer list, document and element
 inspectors, variable-field definitions, live semantic validation, raw JSON
 editing for advanced elements, preview data, and direct PDF rendering through
-the Print Forge layout and PDF crates. It currently provides dedicated visual
-controls for text, rectangles, lines, images, SVG, QR codes, and Code 128;
-imported tables, groups, stacks, and repeaters remain editable through the JSON
-view while their visual inspectors are developed.
+the Print Forge layout and PDF crates. Both the design canvas and its read-only
+rendered-preview mode use resolved engine output, so preview data, wrapped text,
+flow pagination, composed elements, raster images, SVG artwork, QR codes, and
+Code 128 bars are represented on screen. Generated continuation pages can be
+navigated directly in rendered-preview mode, and bleed and trim boundaries are
+shown separately. Screen font rasterization is still an approximation; the
+rendered PDF remains authoritative for final typography and print inspection.
+Imported tables, groups, stacks, and repeaters remain editable through the JSON
+view while their dedicated visual inspectors are developed.
 
 ## CLI
 
@@ -312,7 +317,8 @@ The roadmap below contains only unfinished work. Priorities favor a dependable
 - [ ] Make Print Forge Studio a supported no-code authoring path: add visual
       inspectors for every MVP element, undo/redo, snapping and alignment,
       asset/font management, representative data-row selection, and an exact
-      rendered-page preview; then include the desktop app in release packaging.
+      PDF-rasterized typography preview; then include the desktop app in release
+      packaging.
 - [ ] Generate and publish a versioned JSON Schema plus a human-readable
       template reference covering every field, element, default, constraint,
       and unsupported combination, with a valid example for each element type.

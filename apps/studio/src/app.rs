@@ -1,15 +1,18 @@
-use std::{fs, path::PathBuf};
+use std::{collections::HashMap, fs, path::Path, path::PathBuf};
 
 use eframe::egui::{
     self, Align, Align2, Color32, ComboBox, CornerRadius, FontId, Frame, Id, Key, Layout, Margin,
-    Pos2, Rect, RichText, ScrollArea, Sense, Stroke, StrokeKind, Vec2,
+    Pos2, Rect, RichText, ScrollArea, Sense, Stroke, StrokeKind, TextureHandle, TextureOptions,
+    Vec2,
 };
 use print_forge_dataset::DataRow;
-use print_forge_engine::{BasicLayoutEngine, LayoutOptions};
+use print_forge_engine::{
+    BasicLayoutEngine, DrawCommand, LayoutOptions, LineDash, ResolvedDocument, ResolvedPage,
+};
 use print_forge_pdf::{PdfRenderOptions, PdfRenderer};
 use print_forge_template::{
-    DashStyle, Element, FieldType, FontStyle, ImageFit, Length, QrErrorCorrection, Template,
-    TextAlign, TextOverflow, Unit,
+    Color as PrintColor, DashStyle, Element, FieldType, FontStyle, ImageFit, Length,
+    QrErrorCorrection, Template, TextAlign, TextOverflow, Unit,
 };
 use print_forge_validation::{ValidationReport, validate_template};
 use rfd::{FileDialog, MessageButtons, MessageDialog, MessageDialogResult, MessageLevel};
@@ -55,6 +58,23 @@ struct Notice {
     message: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CanvasMode {
+    Design,
+    Preview,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum AssetKind {
+    Raster,
+    Svg,
+}
+
+#[derive(Default)]
+struct AssetCache {
+    textures: HashMap<(PathBuf, AssetKind), Result<TextureHandle, String>>,
+}
+
 pub struct StudioApp {
     template: Template,
     current_path: Option<PathBuf>,
@@ -68,6 +88,9 @@ pub struct StudioApp {
     show_preview_data: bool,
     preview_data: String,
     print_ready_preview: bool,
+    canvas_mode: CanvasMode,
+    preview_page: usize,
+    asset_cache: AssetCache,
 }
 
 impl StudioApp {
@@ -104,6 +127,9 @@ impl StudioApp {
             show_preview_data: false,
             preview_data,
             print_ready_preview: false,
+            canvas_mode: CanvasMode::Design,
+            preview_page: 0,
+            asset_cache: AssetCache::default(),
         }
     }
 
@@ -114,6 +140,8 @@ impl StudioApp {
         self.template = starter_template();
         self.current_path = None;
         self.current_page = 0;
+        self.preview_page = 0;
+        self.asset_cache.textures.clear();
         self.selection = Selection::Document;
         self.dirty = false;
         self.set_notice(NoticeKind::Success, "Created a new template");
@@ -139,6 +167,8 @@ impl StudioApp {
                 self.template = template;
                 self.current_path = Some(path.clone());
                 self.current_page = 0;
+                self.preview_page = 0;
+                self.asset_cache.textures.clear();
                 self.selection = Selection::Document;
                 self.dirty = false;
                 self.set_notice(
@@ -254,6 +284,18 @@ impl StudioApp {
             ),
             Err(error) => self.set_notice(NoticeKind::Error, format!("Write failed: {error}")),
         }
+    }
+
+    fn preview_document(&self) -> Result<ResolvedDocument, String> {
+        resolve_preview(&self.template, &self.preview_data, self.asset_base())
+    }
+
+    fn asset_base(&self) -> PathBuf {
+        self.current_path
+            .as_deref()
+            .and_then(Path::parent)
+            .unwrap_or_else(|| Path::new("."))
+            .to_owned()
     }
 
     fn confirm_discard(&self) -> bool {
@@ -580,6 +622,12 @@ impl StudioApp {
     }
 
     fn show_canvas(&mut self, ctx: &egui::Context) {
+        let preview = self.preview_document();
+        if let Ok(document) = &preview {
+            self.preview_page = self
+                .preview_page
+                .min(document.pages.len().saturating_sub(1));
+        }
         egui::CentralPanel::default()
             .frame(Frame::new().fill(PANEL_DEEP).inner_margin(Margin::same(0)))
             .show(ctx, |ui| {
@@ -588,11 +636,57 @@ impl StudioApp {
                     .inner_margin(Margin::symmetric(16, 8))
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
+                            if ui
+                                .selectable_label(self.canvas_mode == CanvasMode::Design, "Design")
+                                .clicked()
+                            {
+                                self.canvas_mode = CanvasMode::Design;
+                            }
+                            if ui
+                                .selectable_label(
+                                    self.canvas_mode == CanvasMode::Preview,
+                                    "Rendered preview",
+                                )
+                                .clicked()
+                            {
+                                self.canvas_mode = CanvasMode::Preview;
+                            }
+                            ui.separator();
+                            let page_count = if self.canvas_mode == CanvasMode::Preview {
+                                preview.as_ref().map_or(1, |document| document.pages.len())
+                            } else {
+                                self.template.pages.len()
+                            };
+                            let shown_page = if self.canvas_mode == CanvasMode::Preview {
+                                self.preview_page
+                            } else {
+                                self.current_page
+                            };
                             ui.label(
-                                RichText::new(format!("PAGE {}", self.current_page + 1))
-                                    .strong()
-                                    .color(Color32::from_gray(175)),
+                                RichText::new(format!(
+                                    "PAGE {} OF {}",
+                                    shown_page + 1,
+                                    page_count.max(1)
+                                ))
+                                .strong()
+                                .color(Color32::from_gray(175)),
                             );
+                            if self.canvas_mode == CanvasMode::Preview {
+                                let can_go_back = self.preview_page > 0;
+                                if ui
+                                    .add_enabled(can_go_back, egui::Button::new("‹"))
+                                    .clicked()
+                                {
+                                    self.preview_page -= 1;
+                                }
+                                let can_go_forward = self.preview_page + 1 < page_count;
+                                if ui
+                                    .add_enabled(can_go_forward, egui::Button::new("›"))
+                                    .clicked()
+                                {
+                                    self.preview_page += 1;
+                                }
+                            }
                             ui.separator();
                             ui.label(RichText::new("Zoom").color(Color32::from_gray(150)));
                             ui.add(
@@ -605,7 +699,10 @@ impl StudioApp {
                                 self.zoom = 1.0;
                             }
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                ui.checkbox(&mut self.print_ready_preview, "Print-ready preview");
+                                ui.checkbox(&mut self.print_ready_preview, "PDF/X export");
+                                if ui.small_button("Refresh assets").clicked() {
+                                    self.asset_cache.textures.clear();
+                                }
                             });
                         });
                     });
@@ -613,60 +710,122 @@ impl StudioApp {
                 let available = ui.available_size();
                 let (workspace, background_response) =
                     ui.allocate_exact_size(available, Sense::click());
-                if background_response.clicked() {
+                if background_response.clicked() && self.canvas_mode == CanvasMode::Design {
                     self.selection = Selection::Page;
                 }
-                let page_width = self.template.document.width.to_points().max(1.0);
-                let page_height = self.template.document.height.to_points().max(1.0);
-                let fit = ((workspace.width() - 100.0) / page_width)
-                    .min((workspace.height() - 80.0) / page_height)
+                let (page_width, page_height) = preview.as_ref().map_or_else(
+                    |_| {
+                        (
+                            self.template.document.width.to_points().max(1.0),
+                            self.template.document.height.to_points().max(1.0),
+                        )
+                    },
+                    |document| (document.width_pt.max(1.0), document.height_pt.max(1.0)),
+                );
+                let bleed_points = preview.as_ref().map_or_else(
+                    |_| {
+                        self.template
+                            .document
+                            .bleed
+                            .map_or(0.0, |bleed| bleed.to_points())
+                    },
+                    |document| document.bleed_pt,
+                );
+                let media_width = page_width + bleed_points * 2.0;
+                let media_height = page_height + bleed_points * 2.0;
+                let fit = ((workspace.width() - 100.0) / media_width)
+                    .min((workspace.height() - 80.0) / media_height)
                     .max(0.05);
                 let scale = fit * self.zoom;
                 let page_size = Vec2::new(page_width * scale, page_height * scale);
                 let page_rect = Rect::from_center_size(workspace.center(), page_size);
                 let painter = ui.painter().with_clip_rect(workspace);
+                let media_rect = page_rect.expand(bleed_points * scale);
 
                 painter.rect_filled(
-                    page_rect.translate(Vec2::new(8.0, 10.0)),
+                    media_rect.translate(Vec2::new(8.0, 10.0)),
                     CornerRadius::same(3),
                     Color32::from_black_alpha(80),
                 );
-                painter.rect_filled(page_rect, CornerRadius::same(2), CREAM);
-                if let Some(bleed) = self.template.document.bleed {
-                    let bleed = bleed.to_points() * scale;
+                painter.rect_filled(media_rect, CornerRadius::same(2), Color32::WHITE);
+                if bleed_points > 0.0 {
                     painter.rect_stroke(
-                        page_rect.expand(bleed),
+                        media_rect,
                         CornerRadius::same(2),
                         Stroke::new(1.0_f32, Color32::from_rgb(151, 77, 54)),
                         StrokeKind::Outside,
                     );
+                    paint_rect_stroke(
+                        &painter,
+                        page_rect,
+                        Stroke::new(0.75_f32, Color32::from_gray(175)),
+                        LineDash::Dashed,
+                    );
                 }
-                paint_grid(&painter, page_rect, page_width, page_height, scale);
+                if self.canvas_mode == CanvasMode::Design {
+                    paint_grid(&painter, page_rect, page_width, page_height, scale);
+                }
 
-                let elements = self.template.pages[self.current_page].elements.clone();
-                for (index, element) in elements.iter().enumerate() {
-                    let selected = self.selection == Selection::Element(index);
-                    let interaction =
-                        paint_element(ui, &painter, page_rect, scale, element, index, selected);
-                    if interaction.clicked {
-                        self.selection = Selection::Element(index);
+                let resolved_page = preview.as_ref().ok().and_then(|document| {
+                    if self.canvas_mode == CanvasMode::Preview {
+                        document.pages.get(self.preview_page)
+                    } else {
+                        resolved_template_page(document, self.current_page)
                     }
-                    if let Some(delta) = interaction.translate {
-                        translate_element(
-                            &mut self.template.pages[self.current_page].elements[index],
-                            delta.x / scale,
-                            -delta.y / scale,
+                });
+                let resolved = if let Some(page) = resolved_page {
+                    let document_painter = painter.with_clip_rect(media_rect);
+                    paint_resolved_page(
+                        ctx,
+                        &document_painter,
+                        page_rect,
+                        scale,
+                        page,
+                        &mut self.asset_cache,
+                    );
+                    true
+                } else {
+                    false
+                };
+
+                if self.canvas_mode == CanvasMode::Design {
+                    let elements = self.template.pages[self.current_page].elements.clone();
+                    for (index, element) in elements.iter().enumerate() {
+                        let selected = self.selection == Selection::Element(index);
+                        let interaction = paint_element(
+                            ui,
+                            &painter,
+                            page_rect,
+                            scale,
+                            element,
+                            ElementPaintOptions {
+                                index,
+                                selected,
+                                paint_content: !resolved,
+                            },
                         );
-                        self.dirty = true;
+                        if interaction.clicked {
+                            self.selection = Selection::Element(index);
+                        }
+                        if let Some(delta) = interaction.translate {
+                            translate_element(
+                                &mut self.template.pages[self.current_page].elements[index],
+                                delta.x / scale,
+                                -delta.y / scale,
+                            );
+                            self.dirty = true;
+                        }
+                        if let Some(size) = interaction.resize {
+                            resize_element(
+                                &mut self.template.pages[self.current_page].elements[index],
+                                size.x / scale,
+                                size.y / scale,
+                            );
+                            self.dirty = true;
+                        }
                     }
-                    if let Some(size) = interaction.resize {
-                        resize_element(
-                            &mut self.template.pages[self.current_page].elements[index],
-                            size.x / scale,
-                            size.y / scale,
-                        );
-                        self.dirty = true;
-                    }
+                } else if let Err(error) = &preview {
+                    paint_preview_error(&painter, page_rect, error);
                 }
             });
     }
@@ -754,6 +913,8 @@ impl StudioApp {
                     self.current_page = self
                         .current_page
                         .min(self.template.pages.len().saturating_sub(1));
+                    self.preview_page = 0;
+                    self.asset_cache.textures.clear();
                     self.selection = Selection::Document;
                     self.dirty = true;
                     self.show_json = false;
@@ -777,7 +938,7 @@ impl StudioApp {
             .resizable(true)
             .show(ctx, |ui| {
                 ui.label(
-                    "Enter one JSON object. Its values resolve template variables when rendering a preview PDF.",
+                    "Enter one JSON object. Its values update the rendered canvas and preview PDF.",
                 );
                 ui.add_space(8.0);
                 ui.add(
@@ -882,10 +1043,394 @@ impl eframe::App for StudioApp {
     }
 }
 
+fn resolve_preview(
+    template: &Template,
+    preview_data: &str,
+    asset_base: PathBuf,
+) -> Result<ResolvedDocument, String> {
+    let data = serde_json::from_str::<DataRow>(preview_data)
+        .map_err(|error| format!("Preview data is not a JSON object: {error}"))?;
+    BasicLayoutEngine
+        .layout_with_options(template, &data, &LayoutOptions { asset_base })
+        .map_err(|error| format!("Preview layout failed: {error}"))
+}
+
+fn resolved_template_page(
+    document: &ResolvedDocument,
+    template_page: usize,
+) -> Option<&ResolvedPage> {
+    let prefix = format!("pages[{template_page}].");
+    document
+        .pages
+        .iter()
+        .find(|page| {
+            page.commands
+                .iter()
+                .any(|command| command.source_path.starts_with(&prefix))
+        })
+        .or_else(|| document.pages.get(template_page))
+}
+
 struct ElementInteraction {
     clicked: bool,
     translate: Option<Vec2>,
     resize: Option<Vec2>,
+}
+
+struct ElementPaintOptions {
+    index: usize,
+    selected: bool,
+    paint_content: bool,
+}
+
+fn paint_resolved_page(
+    ctx: &egui::Context,
+    painter: &egui::Painter,
+    page: Rect,
+    scale: f32,
+    resolved: &ResolvedPage,
+    assets: &mut AssetCache,
+) {
+    for resolved_command in &resolved.commands {
+        match &resolved_command.command {
+            DrawCommand::Text(text) => {
+                let bounds = resolved_bounds(page, scale, text.bounds);
+                let text_painter = if text.clip {
+                    painter.with_clip_rect(painter.clip_rect().intersect(bounds))
+                } else {
+                    painter.clone()
+                };
+                let font = FontId::proportional((text.font_size_pt * scale).max(1.0));
+                let color = print_color(text.color);
+                for line in &text.lines {
+                    let mut position = page_point(page, scale, line.x, line.y);
+                    if line.word_spacing_pt.abs() < f32::EPSILON {
+                        text_painter.text(
+                            position,
+                            Align2::LEFT_BOTTOM,
+                            &line.value,
+                            font.clone(),
+                            color,
+                        );
+                        continue;
+                    }
+                    for word in line.value.split_inclusive(' ') {
+                        let painted = text_painter.text(
+                            position,
+                            Align2::LEFT_BOTTOM,
+                            word,
+                            font.clone(),
+                            color,
+                        );
+                        position.x = painted.right();
+                        if word.ends_with(' ') {
+                            position.x += line.word_spacing_pt * scale;
+                        }
+                    }
+                }
+            }
+            DrawCommand::Rectangle(rectangle) => {
+                let rect = resolved_bounds(page, scale, rectangle.bounds);
+                if let Some(fill) = rectangle.fill {
+                    painter.rect_filled(rect, CornerRadius::ZERO, print_color(fill));
+                }
+                if let Some(stroke) = &rectangle.stroke {
+                    paint_rect_stroke(
+                        painter,
+                        rect,
+                        Stroke::new(
+                            (stroke.width_pt * scale).max(0.5),
+                            print_color(stroke.color),
+                        ),
+                        stroke.dash,
+                    );
+                }
+            }
+            DrawCommand::Line(line) => paint_styled_line(
+                painter,
+                page_point(page, scale, line.start.x, line.start.y),
+                page_point(page, scale, line.end.x, line.end.y),
+                Stroke::new((line.width_pt * scale).max(0.5), print_color(line.color)),
+                line.dash,
+            ),
+            DrawCommand::Image(image) => paint_asset(
+                ctx,
+                painter,
+                resolved_bounds(page, scale, image.bounds),
+                &image.source,
+                image.fit,
+                AssetKind::Raster,
+                assets,
+            ),
+            DrawCommand::Svg(svg) => paint_asset(
+                ctx,
+                painter,
+                resolved_bounds(page, scale, svg.bounds),
+                &svg.source,
+                svg.fit,
+                AssetKind::Svg,
+                assets,
+            ),
+            DrawCommand::QrCode(qr) => {
+                let rect = resolved_bounds(page, scale, qr.bounds);
+                painter.rect_filled(rect, CornerRadius::ZERO, print_color(qr.background));
+                let total = qr.size + usize::from(qr.quiet_zone) * 2;
+                let module = rect.width() / total as f32;
+                let quiet = usize::from(qr.quiet_zone);
+                for y in 0..qr.size {
+                    for x in 0..qr.size {
+                        if qr.modules[y * qr.size + x] {
+                            painter.rect_filled(
+                                Rect::from_min_size(
+                                    Pos2::new(
+                                        rect.left() + (quiet + x) as f32 * module,
+                                        rect.top() + (quiet + y) as f32 * module,
+                                    ),
+                                    Vec2::splat(module + 0.25),
+                                ),
+                                CornerRadius::ZERO,
+                                print_color(qr.color),
+                            );
+                        }
+                    }
+                }
+            }
+            DrawCommand::Barcode(barcode) => {
+                let rect = resolved_bounds(page, scale, barcode.bounds);
+                painter.rect_filled(rect, CornerRadius::ZERO, print_color(barcode.background));
+                let total = barcode.modules.len() + usize::from(barcode.quiet_zone) * 2;
+                let module = rect.width() / total as f32;
+                let quiet = usize::from(barcode.quiet_zone);
+                for (index, active) in barcode.modules.iter().enumerate() {
+                    if *active {
+                        painter.rect_filled(
+                            Rect::from_min_max(
+                                Pos2::new(
+                                    rect.left() + (quiet + index) as f32 * module,
+                                    rect.top(),
+                                ),
+                                Pos2::new(
+                                    rect.left() + (quiet + index + 1) as f32 * module + 0.25,
+                                    rect.bottom(),
+                                ),
+                            ),
+                            CornerRadius::ZERO,
+                            print_color(barcode.color),
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn resolved_bounds(page: Rect, scale: f32, bounds: print_forge_engine::Rect) -> Rect {
+    page_bounds(
+        page,
+        scale,
+        [bounds.x, bounds.y, bounds.width, bounds.height],
+    )
+}
+
+fn print_color(color: PrintColor) -> Color32 {
+    match color {
+        PrintColor::Rgb { red, green, blue } => Color32::from_rgb(red, green, blue),
+        PrintColor::Cmyk {
+            cyan,
+            magenta,
+            yellow,
+            black,
+        } => {
+            let convert = |ink: f32| {
+                ((1.0 - ink / 100.0) * (1.0 - black / 100.0) * 255.0)
+                    .round()
+                    .clamp(0.0, 255.0) as u8
+            };
+            Color32::from_rgb(convert(cyan), convert(magenta), convert(yellow))
+        }
+    }
+}
+
+fn paint_rect_stroke(painter: &egui::Painter, rect: Rect, stroke: Stroke, dash: LineDash) {
+    paint_styled_line(painter, rect.left_top(), rect.right_top(), stroke, dash);
+    paint_styled_line(painter, rect.right_top(), rect.right_bottom(), stroke, dash);
+    paint_styled_line(
+        painter,
+        rect.right_bottom(),
+        rect.left_bottom(),
+        stroke,
+        dash,
+    );
+    paint_styled_line(painter, rect.left_bottom(), rect.left_top(), stroke, dash);
+}
+
+fn paint_styled_line(
+    painter: &egui::Painter,
+    start: Pos2,
+    end: Pos2,
+    stroke: Stroke,
+    dash: LineDash,
+) {
+    if dash == LineDash::Solid {
+        painter.line_segment([start, end], stroke);
+        return;
+    }
+    let delta = end - start;
+    let length = delta.length();
+    if length <= f32::EPSILON {
+        return;
+    }
+    let direction = delta / length;
+    let (mark, gap) = match dash {
+        LineDash::Dashed => ((stroke.width * 4.0).max(5.0), (stroke.width * 2.5).max(3.0)),
+        LineDash::Dotted => (stroke.width.max(1.0), (stroke.width * 2.5).max(3.0)),
+        LineDash::Solid => unreachable!(),
+    };
+    let mut offset = 0.0;
+    while offset < length {
+        let mark_end = (offset + mark).min(length);
+        painter.line_segment(
+            [start + direction * offset, start + direction * mark_end],
+            stroke,
+        );
+        offset += mark + gap;
+    }
+}
+
+fn paint_asset(
+    ctx: &egui::Context,
+    painter: &egui::Painter,
+    bounds: Rect,
+    path: &Path,
+    fit: ImageFit,
+    kind: AssetKind,
+    assets: &mut AssetCache,
+) {
+    match asset_texture(ctx, path, kind, assets) {
+        Ok(texture) => paint_fitted_texture(painter, bounds, &texture, fit),
+        Err(error) => paint_placeholder(painter, bounds, "ASSET UNAVAILABLE", &error),
+    }
+}
+
+fn asset_texture(
+    ctx: &egui::Context,
+    path: &Path,
+    kind: AssetKind,
+    assets: &mut AssetCache,
+) -> Result<TextureHandle, String> {
+    let key = (path.to_owned(), kind);
+    if let Some(cached) = assets.textures.get(&key) {
+        return cached.clone();
+    }
+    let loaded = match kind {
+        AssetKind::Raster => load_raster_texture(ctx, path),
+        AssetKind::Svg => load_svg_texture(ctx, path),
+    };
+    assets.textures.insert(key, loaded.clone());
+    loaded
+}
+
+fn load_raster_texture(ctx: &egui::Context, path: &Path) -> Result<TextureHandle, String> {
+    let image = image::open(path)
+        .map_err(|error| format!("{}: {error}", display_name(path)))?
+        .to_rgba8();
+    let size = [image.width() as usize, image.height() as usize];
+    let pixels = image.into_raw();
+    Ok(ctx.load_texture(
+        path.display().to_string(),
+        egui::ColorImage::from_rgba_unmultiplied(size, &pixels),
+        TextureOptions::LINEAR,
+    ))
+}
+
+fn load_svg_texture(ctx: &egui::Context, path: &Path) -> Result<TextureHandle, String> {
+    let bytes = fs::read(path).map_err(|error| format!("{}: {error}", display_name(path)))?;
+    let tree = resvg::usvg::Tree::from_data(&bytes, &resvg::usvg::Options::default())
+        .map_err(|error| format!("{}: {error}", display_name(path)))?;
+    let intrinsic = tree.size();
+    let largest = intrinsic.width().max(intrinsic.height());
+    let raster_scale = (2048.0 / largest).min(4.0);
+    let width = (intrinsic.width() * raster_scale).round().max(1.0) as u32;
+    let height = (intrinsic.height() * raster_scale).round().max(1.0) as u32;
+    let mut pixmap = resvg::tiny_skia::Pixmap::new(width, height)
+        .ok_or_else(|| format!("{} is too large to preview", display_name(path)))?;
+    resvg::render(
+        &tree,
+        resvg::tiny_skia::Transform::from_scale(raster_scale, raster_scale),
+        &mut pixmap.as_mut(),
+    );
+    Ok(ctx.load_texture(
+        path.display().to_string(),
+        egui::ColorImage::from_rgba_premultiplied([width as usize, height as usize], pixmap.data()),
+        TextureOptions::LINEAR,
+    ))
+}
+
+fn paint_fitted_texture(
+    painter: &egui::Painter,
+    bounds: Rect,
+    texture: &TextureHandle,
+    fit: ImageFit,
+) {
+    let source = texture.size_vec2();
+    if source.x <= 0.0 || source.y <= 0.0 {
+        return;
+    }
+    let full_uv = Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0));
+    match fit {
+        ImageFit::Stretch => painter.image(texture.id(), bounds, full_uv, Color32::WHITE),
+        ImageFit::Contain => {
+            let factor = (bounds.width() / source.x).min(bounds.height() / source.y);
+            let destination = Rect::from_center_size(bounds.center(), source * factor);
+            painter.image(texture.id(), destination, full_uv, Color32::WHITE)
+        }
+        ImageFit::Cover => {
+            let source_aspect = source.x / source.y;
+            let target_aspect = bounds.width() / bounds.height();
+            let uv = if source_aspect > target_aspect {
+                let visible = target_aspect / source_aspect;
+                let inset = (1.0 - visible) / 2.0;
+                Rect::from_min_max(Pos2::new(inset, 0.0), Pos2::new(1.0 - inset, 1.0))
+            } else {
+                let visible = source_aspect / target_aspect;
+                let inset = (1.0 - visible) / 2.0;
+                Rect::from_min_max(Pos2::new(0.0, inset), Pos2::new(1.0, 1.0 - inset))
+            };
+            painter.image(texture.id(), bounds, uv, Color32::WHITE)
+        }
+    };
+}
+
+fn paint_preview_error(painter: &egui::Painter, page: Rect, error: &str) {
+    let card = Rect::from_center_size(
+        page.center(),
+        Vec2::new((page.width() - 48.0).min(520.0), 110.0),
+    );
+    painter.rect_filled(
+        card,
+        CornerRadius::same(6),
+        Color32::from_rgb(255, 235, 230),
+    );
+    painter.rect_stroke(
+        card,
+        CornerRadius::same(6),
+        Stroke::new(1.0_f32, Color32::from_rgb(190, 77, 54)),
+        StrokeKind::Inside,
+    );
+    painter.text(
+        card.center_top() + Vec2::new(0.0, 24.0),
+        Align2::CENTER_TOP,
+        "Preview could not be rendered",
+        FontId::proportional(16.0),
+        Color32::from_rgb(139, 42, 28),
+    );
+    painter.text(
+        card.center_bottom() - Vec2::new(0.0, 24.0),
+        Align2::CENTER_BOTTOM,
+        error,
+        FontId::proportional(11.0),
+        Color32::from_rgb(100, 56, 48),
+    );
 }
 
 fn paint_element(
@@ -894,8 +1439,7 @@ fn paint_element(
     page: Rect,
     scale: f32,
     element: &Element,
-    index: usize,
-    selected: bool,
+    options: ElementPaintOptions,
 ) -> ElementInteraction {
     let mut interaction = ElementInteraction {
         clicked: false,
@@ -905,21 +1449,23 @@ fn paint_element(
     if let Element::Line(line) = element {
         let start = page_point(page, scale, line.x1.to_points(), line.y1.to_points());
         let end = page_point(page, scale, line.x2.to_points(), line.y2.to_points());
-        painter.line_segment(
-            [start, end],
-            Stroke::new(line.width.to_points().max(1.0), parse_color(&line.color)),
-        );
+        if options.paint_content {
+            painter.line_segment(
+                [start, end],
+                Stroke::new(line.width.to_points().max(1.0), parse_color(&line.color)),
+            );
+        }
         let rect = Rect::from_two_pos(start, end).expand(7.0);
         let response = ui.interact(
             rect,
-            Id::new(("canvas-line", index)),
+            Id::new(("canvas-line", options.index)),
             Sense::click_and_drag(),
         );
         interaction.clicked = response.clicked();
         if response.dragged() {
             interaction.translate = Some(ui.input(|input| input.pointer.delta()));
         }
-        if selected {
+        if options.selected {
             painter.rect_stroke(
                 rect,
                 CornerRadius::same(1),
@@ -935,10 +1481,12 @@ fn paint_element(
     };
     let points = bounds_points(bounds);
     let rect = page_bounds(page, scale, points);
-    paint_element_content(painter, rect, scale, element);
+    if options.paint_content {
+        paint_element_content(painter, rect, scale, element);
+    }
     let response = ui.interact(
         rect,
-        Id::new(("canvas-element", index)),
+        Id::new(("canvas-element", options.index)),
         Sense::click_and_drag(),
     );
     interaction.clicked = response.clicked();
@@ -948,7 +1496,7 @@ fn paint_element(
     if response.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
     }
-    if selected {
+    if options.selected {
         painter.rect_stroke(
             rect,
             CornerRadius::same(2),
@@ -957,7 +1505,11 @@ fn paint_element(
         );
         let handle = Rect::from_center_size(rect.right_top(), Vec2::splat(12.0));
         painter.rect_filled(handle, CornerRadius::same(2), ORANGE);
-        let resize = ui.interact(handle, Id::new(("canvas-resize", index)), Sense::drag());
+        let resize = ui.interact(
+            handle,
+            Id::new(("canvas-resize", options.index)),
+            Sense::drag(),
+        );
         if resize.dragged() {
             let delta = ui.input(|input| input.pointer.delta());
             interaction.translate = None;
@@ -1563,7 +2115,13 @@ fn configure_style(ctx: &egui::Context) {
 
 #[cfg(test)]
 mod tests {
-    use super::{safe_stem, serialize_template};
+    use std::path::PathBuf;
+
+    use eframe::egui::Color32;
+    use print_forge_engine::DrawCommand;
+    use print_forge_template::{Color as PrintColor, Element};
+
+    use super::{print_color, resolve_preview, safe_stem, serialize_template};
     use crate::model::starter_template;
 
     #[test]
@@ -1577,5 +2135,35 @@ mod tests {
     #[test]
     fn output_names_are_safe() {
         assert_eq!(safe_stem(" ACME / Summer Catalog "), "acme-summer-catalog");
+    }
+
+    #[test]
+    fn rendered_preview_uses_variable_data_and_engine_text_layout() {
+        let mut template = starter_template();
+        let Element::Text(text) = &mut template.pages[0].elements[0] else {
+            panic!("starter element should be text");
+        };
+        text.value = "Hello {{customer}}".to_owned();
+
+        let preview =
+            resolve_preview(&template, r#"{"customer":"Ada"}"#, PathBuf::from(".")).unwrap();
+        let DrawCommand::Text(text) = &preview.pages[0].commands[0].command else {
+            panic!("resolved preview command should be text");
+        };
+
+        assert_eq!(text.lines[0].value, "Hello Ada");
+    }
+
+    #[test]
+    fn preview_converts_process_color_to_screen_rgb() {
+        assert_eq!(
+            print_color(PrintColor::Cmyk {
+                cyan: 100.0,
+                magenta: 0.0,
+                yellow: 0.0,
+                black: 0.0,
+            }),
+            Color32::from_rgb(0, 255, 255)
+        );
     }
 }

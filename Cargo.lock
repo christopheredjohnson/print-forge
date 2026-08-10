@@ -2676,11 +2676,13 @@ name = "print-forge-studio"
 version = "0.1.0"
 dependencies = [
  "eframe",
+ "image",
  "print-forge-dataset",
  "print-forge-engine",
  "print-forge-pdf",
  "print-forge-template",
  "print-forge-validation",
+ "resvg",
  "rfd",
  "serde",
  "serde_json",
