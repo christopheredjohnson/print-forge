@@ -7,6 +7,7 @@ license.workspace = true
 
 [dependencies]
 barcoders.workspace = true
+pdf-core-14-font-afms.workspace = true
 print-forge-dataset.workspace = true
 print-forge-template.workspace = true
 qrcodegen.workspace = true

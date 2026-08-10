@@ -2466,6 +2466,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "pdf-core-14-font-afms"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "101bf43916a119dd95371220343f744a43c57f13cff865402c0fcbc89dede4f3"
+
+[[package]]
 name = "pdf-writer"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2650,6 +2656,7 @@ name = "print-forge-engine"
 version = "0.1.0"
 dependencies = [
  "barcoders",
+ "pdf-core-14-font-afms",
  "print-forge-dataset",
  "print-forge-template",
  "qrcodegen",

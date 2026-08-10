@@ -2194,14 +2194,20 @@ fn wrap_text(
 }
 
 enum FontMetrics {
-    Builtin,
+    Builtin(&'static [f32; 256]),
     External(Vec<u8>),
 }
 
 impl FontMetrics {
     fn load(font: &ResolvedFont) -> Result<Self, ElementLayoutError> {
         match font {
-            ResolvedFont::Builtin(_) => Ok(Self::Builtin),
+            ResolvedFont::Builtin(name) => {
+                builtin_font_widths(name).map(Self::Builtin).ok_or_else(|| {
+                    ElementLayoutError::InvalidLayout(format!(
+                        "built-in font {name:?} does not have width metrics"
+                    ))
+                })
+            }
             ResolvedFont::External(path) => fs::read(path).map(Self::External).map_err(|error| {
                 ElementLayoutError::InvalidLayout(format!(
                     "cannot read font asset {}: {error}",
@@ -2213,10 +2219,22 @@ impl FontMetrics {
 
     fn measure(&self, value: &str, font_size: f32) -> f32 {
         match self {
-            Self::Builtin => value.chars().map(builtin_advance_em).sum::<f32>() * font_size,
+            Self::Builtin(widths) => {
+                value
+                    .chars()
+                    .map(|character| {
+                        if character.is_ascii() {
+                            widths[character as usize] / 1_000.0
+                        } else {
+                            approximate_advance_em(character)
+                        }
+                    })
+                    .sum::<f32>()
+                    * font_size
+            }
             Self::External(bytes) => {
                 let Ok(face) = ttf_parser::Face::parse(bytes, 0) else {
-                    return value.chars().map(builtin_advance_em).sum::<f32>() * font_size;
+                    return value.chars().map(approximate_advance_em).sum::<f32>() * font_size;
                 };
                 let units_per_em = f32::from(face.units_per_em());
                 value
@@ -2234,7 +2252,68 @@ impl FontMetrics {
     }
 }
 
-fn builtin_advance_em(character: char) -> f32 {
+fn builtin_font_widths(name: &str) -> Option<&'static [f32; 256]> {
+    use std::sync::OnceLock;
+
+    static HELVETICA: OnceLock<[f32; 256]> = OnceLock::new();
+    static HELVETICA_BOLD: OnceLock<[f32; 256]> = OnceLock::new();
+    static HELVETICA_OBLIQUE: OnceLock<[f32; 256]> = OnceLock::new();
+    static HELVETICA_BOLD_OBLIQUE: OnceLock<[f32; 256]> = OnceLock::new();
+    static TIMES_ROMAN: OnceLock<[f32; 256]> = OnceLock::new();
+    static TIMES_BOLD: OnceLock<[f32; 256]> = OnceLock::new();
+    static TIMES_ITALIC: OnceLock<[f32; 256]> = OnceLock::new();
+    static TIMES_BOLD_ITALIC: OnceLock<[f32; 256]> = OnceLock::new();
+    static COURIER: OnceLock<[f32; 256]> = OnceLock::new();
+    static COURIER_BOLD: OnceLock<[f32; 256]> = OnceLock::new();
+    static COURIER_OBLIQUE: OnceLock<[f32; 256]> = OnceLock::new();
+    static COURIER_BOLD_OBLIQUE: OnceLock<[f32; 256]> = OnceLock::new();
+
+    let (cache, afm) = match name {
+        "helvetica" => (&HELVETICA, pdf_core_14_font_afms::HELVETICA),
+        "helvetica-bold" => (&HELVETICA_BOLD, pdf_core_14_font_afms::HELVETICA_BOLD),
+        "helvetica-oblique" => (&HELVETICA_OBLIQUE, pdf_core_14_font_afms::HELVETICA_OBLIQUE),
+        "helvetica-bold-oblique" => (
+            &HELVETICA_BOLD_OBLIQUE,
+            pdf_core_14_font_afms::HELVETICA_BOLD_OBLIQUE,
+        ),
+        "times-roman" => (&TIMES_ROMAN, pdf_core_14_font_afms::TIMES_ROMAN),
+        "times-bold" => (&TIMES_BOLD, pdf_core_14_font_afms::TIMES_BOLD),
+        "times-italic" => (&TIMES_ITALIC, pdf_core_14_font_afms::TIMES_ITALIC),
+        "times-bold-italic" => (&TIMES_BOLD_ITALIC, pdf_core_14_font_afms::TIMES_BOLD_ITALIC),
+        "courier" => (&COURIER, pdf_core_14_font_afms::COURIER),
+        "courier-bold" => (&COURIER_BOLD, pdf_core_14_font_afms::COURIER_BOLD),
+        "courier-oblique" => (&COURIER_OBLIQUE, pdf_core_14_font_afms::COURIER_OBLIQUE),
+        "courier-bold-oblique" => (
+            &COURIER_BOLD_OBLIQUE,
+            pdf_core_14_font_afms::COURIER_BOLD_OBLIQUE,
+        ),
+        _ => return None,
+    };
+
+    Some(cache.get_or_init(|| parse_afm_widths(afm)))
+}
+
+fn parse_afm_widths(afm: &str) -> [f32; 256] {
+    let mut widths = [600.0; 256];
+    for line in afm.lines().filter(|line| line.starts_with("C ")) {
+        let mut code = None;
+        let mut width = None;
+        for field in line.split(';') {
+            let mut parts = field.split_whitespace();
+            match parts.next() {
+                Some("C") => code = parts.next().and_then(|value| value.parse::<usize>().ok()),
+                Some("WX") => width = parts.next().and_then(|value| value.parse::<f32>().ok()),
+                _ => {}
+            }
+        }
+        if let (Some(code @ 0..=255), Some(width)) = (code, width) {
+            widths[code] = width;
+        }
+    }
+    widths
+}
+
+fn approximate_advance_em(character: char) -> f32 {
     match character {
         ' ' => 0.278,
         'i' | 'l' | 'I' | '!' | '|' | '.' | ',' | ':' | ';' | '\'' => 0.278,
@@ -2459,7 +2538,7 @@ mod tests {
 
     use super::{
         BasicLayoutEngine, DrawCommand, ElementLayoutError, FontMetrics, LayoutEngine, LayoutError,
-        LayoutOptions, Rect, TextLayoutSpec, format_table_value, layout_text,
+        LayoutOptions, Rect, ResolvedFont, TextLayoutSpec, format_table_value, layout_text,
     };
 
     const TEMPLATE: &str = r##"
@@ -2528,6 +2607,7 @@ mod tests {
 
     #[test]
     fn wraps_aligns_and_shrinks_text_inside_absolute_bounds() {
+        let metrics = FontMetrics::load(&ResolvedFont::Builtin("helvetica".to_owned())).unwrap();
         let bounds = Rect {
             x: 10.0,
             y: 20.0,
@@ -2544,7 +2624,7 @@ mod tests {
                 align: TextAlign::Center,
                 overflow: TextOverflow::Shrink,
             },
-            &FontMetrics::Builtin,
+            &metrics,
         )
         .unwrap();
 
@@ -2556,6 +2636,7 @@ mod tests {
 
     #[test]
     fn error_overflow_rejects_text_that_does_not_fit() {
+        let metrics = FontMetrics::load(&ResolvedFont::Builtin("helvetica".to_owned())).unwrap();
         let error = layout_text(
             "this cannot fit",
             TextLayoutSpec {
@@ -2571,7 +2652,7 @@ mod tests {
                 align: TextAlign::Left,
                 overflow: TextOverflow::Error,
             },
-            &FontMetrics::Builtin,
+            &metrics,
         )
         .unwrap_err();
 
@@ -2580,6 +2661,40 @@ mod tests {
                 .to_string()
                 .contains("text exceeds its absolute bounds")
         );
+    }
+
+    #[test]
+    fn right_alignment_uses_exact_builtin_font_widths() {
+        let metrics = FontMetrics::load(&ResolvedFont::Builtin("helvetica".to_owned())).unwrap();
+        let bounds = Rect {
+            x: 18.0,
+            y: 18.0,
+            width: 216.0,
+            height: 24.0,
+        };
+
+        for (value, expected_width) in [
+            ("Chris Johnson", 115.038_f32),
+            ("Developer", 82.026_f32),
+            ("111-111-1111", 112.068_f32),
+        ] {
+            let text = layout_text(
+                value,
+                TextLayoutSpec {
+                    bounds,
+                    requested_font_size: 18.0,
+                    requested_line_height: 21.6,
+                    min_font_size: 6.0,
+                    align: TextAlign::Right,
+                    overflow: TextOverflow::Error,
+                },
+                &metrics,
+            )
+            .unwrap();
+
+            assert!((metrics.measure(value, 18.0) - expected_width).abs() < 0.001);
+            assert!((text.lines[0].x + expected_width - 234.0).abs() < 0.001);
+        }
     }
 
     #[test]
