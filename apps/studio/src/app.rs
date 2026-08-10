@@ -1401,36 +1401,134 @@ fn paint_fitted_texture(
     };
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct PreviewErrorCopy {
+    location: Option<String>,
+    message: String,
+    suggestion: Option<String>,
+}
+
+fn preview_error_copy(error: &str) -> PreviewErrorCopy {
+    let error = error
+        .strip_prefix("Preview layout failed: ")
+        .unwrap_or(error);
+    let (location, detail) = error
+        .split_once(": layout failed: ")
+        .map_or((None, error), |(location, detail)| {
+            (friendly_error_location(location), detail)
+        });
+    let (message, suggestion) = detail
+        .split_once("; ")
+        .map_or((detail, None), |(message, suggestion)| {
+            (message, Some(sentence_case(suggestion)))
+        });
+    PreviewErrorCopy {
+        location,
+        message: sentence_case(message),
+        suggestion,
+    }
+}
+
+fn friendly_error_location(location: &str) -> Option<String> {
+    let page = number_after(location, "page ").map(|index| index + 1);
+    let element = number_after(location, ".elements[").map(|index| index + 1);
+    match (page, element) {
+        (Some(page), Some(element)) => Some(format!("Page {page} · Element {element}")),
+        (Some(page), None) => Some(format!("Page {page}")),
+        (None, _) if location.trim().is_empty() => None,
+        (None, _) => Some(location.trim().to_owned()),
+    }
+}
+
+fn number_after(value: &str, marker: &str) -> Option<usize> {
+    let start = value.find(marker)? + marker.len();
+    let digits = value[start..]
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect::<String>();
+    (!digits.is_empty()).then(|| digits.parse().ok()).flatten()
+}
+
+fn sentence_case(value: &str) -> String {
+    let value = value.trim().trim_end_matches('.');
+    let mut characters = value.chars();
+    let Some(first) = characters.next() else {
+        return String::new();
+    };
+    format!("{}{}.", first.to_uppercase(), characters.as_str())
+}
+
 fn paint_preview_error(painter: &egui::Painter, page: Rect, error: &str) {
-    let card = Rect::from_center_size(
-        page.center(),
-        Vec2::new((page.width() - 48.0).min(520.0), 110.0),
+    let copy = preview_error_copy(error);
+    let width = (page.width() - 40.0).clamp(80.0, 620.0);
+    let text_width = (width - 48.0).max(48.0);
+    let title = painter.layout(
+        "Preview unavailable".to_owned(),
+        FontId::proportional(18.0),
+        Color32::from_rgb(115, 32, 24),
+        text_width,
     );
+    let location = copy.location.as_ref().map(|location| {
+        painter.layout(
+            location.to_uppercase(),
+            FontId::proportional(10.0),
+            Color32::from_rgb(151, 60, 45),
+            text_width,
+        )
+    });
+    let message = painter.layout(
+        copy.message,
+        FontId::proportional(13.0),
+        Color32::from_rgb(73, 46, 42),
+        text_width,
+    );
+    let suggestion = copy.suggestion.map(|suggestion| {
+        painter.layout(
+            format!("Fix: {suggestion}"),
+            FontId::proportional(12.0),
+            Color32::from_rgb(96, 56, 49),
+            text_width,
+        )
+    });
+    let location_height = location
+        .as_ref()
+        .map_or(0.0, |galley| galley.size().y + 10.0);
+    let suggestion_height = suggestion
+        .as_ref()
+        .map_or(0.0, |galley| galley.size().y + 12.0);
+    let content_height =
+        48.0 + title.size().y + location_height + message.size().y + suggestion_height;
+    let height = content_height.min((page.height() - 40.0).max(96.0));
+    let card = Rect::from_center_size(page.center(), Vec2::new(width, height));
     painter.rect_filled(
         card,
-        CornerRadius::same(6),
-        Color32::from_rgb(255, 235, 230),
+        CornerRadius::same(8),
+        Color32::from_rgb(255, 246, 243),
     );
     painter.rect_stroke(
         card,
-        CornerRadius::same(6),
-        Stroke::new(1.0_f32, Color32::from_rgb(190, 77, 54)),
+        CornerRadius::same(8),
+        Stroke::new(1.0_f32, Color32::from_rgb(220, 106, 81)),
         StrokeKind::Inside,
     );
-    painter.text(
-        card.center_top() + Vec2::new(0.0, 24.0),
-        Align2::CENTER_TOP,
-        "Preview could not be rendered",
-        FontId::proportional(16.0),
-        Color32::from_rgb(139, 42, 28),
+    painter.rect_filled(
+        Rect::from_min_max(card.left_top(), Pos2::new(card.left() + 5.0, card.bottom())),
+        CornerRadius::same(8),
+        Color32::from_rgb(224, 80, 54),
     );
-    painter.text(
-        card.center_bottom() - Vec2::new(0.0, 24.0),
-        Align2::CENTER_BOTTOM,
-        error,
-        FontId::proportional(11.0),
-        Color32::from_rgb(100, 56, 48),
-    );
+    let clipped = painter.with_clip_rect(card.shrink(16.0));
+    let mut position = card.left_top() + Vec2::new(24.0, 20.0);
+    clipped.galley(position, title.clone(), Color32::PLACEHOLDER);
+    position.y += title.size().y + 10.0;
+    if let Some(location) = location {
+        clipped.galley(position, location.clone(), Color32::PLACEHOLDER);
+        position.y += location.size().y + 10.0;
+    }
+    clipped.galley(position, message.clone(), Color32::PLACEHOLDER);
+    position.y += message.size().y + 12.0;
+    if let Some(suggestion) = suggestion {
+        clipped.galley(position, suggestion, Color32::PLACEHOLDER);
+    }
 }
 
 fn paint_element(
@@ -2121,7 +2219,10 @@ mod tests {
     use print_forge_engine::DrawCommand;
     use print_forge_template::{Color as PrintColor, Element};
 
-    use super::{print_color, resolve_preview, safe_stem, serialize_template};
+    use super::{
+        PreviewErrorCopy, preview_error_copy, print_color, resolve_preview, safe_stem,
+        serialize_template,
+    };
     use crate::model::starter_template;
 
     #[test]
@@ -2164,6 +2265,22 @@ mod tests {
                 black: 0.0,
             }),
             Color32::from_rgb(0, 255, 255)
+        );
+    }
+
+    #[test]
+    fn preview_errors_are_split_into_readable_actionable_copy() {
+        assert_eq!(
+            preview_error_copy(
+                "Preview layout failed: page 0, element pages[0].elements[2]: layout failed: Code 128 module size is 0.37pt; increase its width to provide at least 0.50pt per module",
+            ),
+            PreviewErrorCopy {
+                location: Some("Page 1 · Element 3".to_owned()),
+                message: "Code 128 module size is 0.37pt.".to_owned(),
+                suggestion: Some(
+                    "Increase its width to provide at least 0.50pt per module.".to_owned(),
+                ),
+            }
         );
     }
 }
