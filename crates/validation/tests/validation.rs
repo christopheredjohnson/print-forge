@@ -337,6 +337,63 @@ fn rejects_invalid_flow_layout_contracts() {
 }
 
 #[test]
+fn validates_specialty_element_scan_constraints() {
+    let valid_template: Template =
+        serde_json::from_str(include_str!("../../../examples/specialty-elements.json")).unwrap();
+    let dataset = Dataset::from_json_reader(
+        include_bytes!("../../../examples/specialty-elements-data.json").as_slice(),
+    )
+    .unwrap();
+    assert!(validate_job(&valid_template, &dataset).is_valid());
+
+    let invalid = template(
+        r##"{
+          "name": "Unsafe codes",
+          "document": {
+            "width": { "value": 200, "unit": "points" },
+            "height": { "value": 200, "unit": "points" }
+          },
+          "pages": [{ "elements": [
+            {
+              "type": "qr_code",
+              "position": {
+                "x": { "value": 10, "unit": "points" },
+                "y": { "value": 100, "unit": "points" },
+                "width": { "value": 80, "unit": "points" },
+                "height": { "value": 70, "unit": "points" }
+              },
+              "value": "value",
+              "quiet_zone": 2,
+              "color": "red"
+            },
+            {
+              "type": "barcode",
+              "position": {
+                "x": { "value": 10, "unit": "points" },
+                "y": { "value": 20, "unit": "points" },
+                "width": { "value": 180, "unit": "points" },
+                "height": { "value": 10, "unit": "points" }
+              },
+              "value": "PF-1",
+              "quiet_zone": 4
+            }
+          ] }]
+        }"##,
+    );
+    let report = validate_template(&invalid);
+    let codes = report
+        .errors()
+        .map(|diagnostic| diagnostic.code)
+        .collect::<Vec<_>>();
+
+    assert!(codes.contains(&"qr_code.quiet_zone"));
+    assert!(codes.contains(&"qr_code.not_square"));
+    assert!(codes.contains(&"color.invalid"));
+    assert!(codes.contains(&"barcode.quiet_zone"));
+    assert!(codes.contains(&"barcode.too_short"));
+}
+
+#[test]
 fn accepts_mixed_width_tables_and_scalar_formatted_cells() {
     let template = template(
         r##"{

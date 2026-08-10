@@ -300,6 +300,7 @@ pub enum Element {
     Line(LineElement),
     Svg(SvgElement),
     QrCode(QrCodeElement),
+    Barcode(BarcodeElement),
     Group(GroupElement),
     Stack(StackElement),
     Table(TableElement),
@@ -422,13 +423,57 @@ pub struct SvgElement {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub position: Option<Bounds>,
     pub source: String,
+    #[serde(default)]
+    pub fit: ImageFit,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct QrCodeElement {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub position: Option<Bounds>,
     pub value: String,
+    #[serde(default)]
+    pub error_correction: QrErrorCorrection,
+    #[serde(default = "default_qr_quiet_zone")]
+    pub quiet_zone: u8,
+    #[serde(default = "default_color")]
+    pub color: String,
+    #[serde(default = "default_background_color")]
+    pub background: String,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QrErrorCorrection {
+    Low,
+    #[default]
+    Medium,
+    Quartile,
+    High,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BarcodeElement {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position: Option<Bounds>,
+    pub value: String,
+    #[serde(default)]
+    pub format: BarcodeFormat,
+    #[serde(default = "default_barcode_quiet_zone")]
+    pub quiet_zone: u8,
+    #[serde(default = "default_color")]
+    pub color: String,
+    #[serde(default = "default_background_color")]
+    pub background: String,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BarcodeFormat {
+    #[default]
+    Code128,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -574,6 +619,18 @@ fn default_color() -> String {
     "#000000".to_owned()
 }
 
+fn default_background_color() -> String {
+    "#FFFFFF".to_owned()
+}
+
+const fn default_qr_quiet_zone() -> u8 {
+    4
+}
+
+const fn default_barcode_quiet_zone() -> u8 {
+    10
+}
+
 const fn zero_length() -> Length {
     Length::points(0.0)
 }
@@ -600,7 +657,10 @@ const fn default_table_header_font_style() -> FontStyle {
 
 #[cfg(test)]
 mod tests {
-    use super::{Color, Element, FlowOverflow, FontStyle, Length, TableColumnWidth, Template};
+    use super::{
+        BarcodeFormat, Color, Element, FlowOverflow, FontStyle, Length, QrErrorCorrection,
+        TableColumnWidth, Template,
+    };
 
     #[test]
     fn converts_supported_units_to_points() {
@@ -703,5 +763,55 @@ mod tests {
         unsupported["pages"][0]["elements"][0]["merged_cells"] = serde_json::json!([]);
         let error = serde_json::from_value::<Template>(unsupported).unwrap_err();
         assert!(error.to_string().contains("unknown field `merged_cells`"));
+    }
+
+    #[test]
+    fn specialty_elements_have_scan_safe_defaults() {
+        let template: Template = serde_json::from_str(
+            r##"{
+              "name": "Codes",
+              "document": {
+                "width": { "value": 200, "unit": "points" },
+                "height": { "value": 200, "unit": "points" }
+              },
+              "pages": [{ "elements": [
+                {
+                  "type": "qr_code",
+                  "position": {
+                    "x": { "value": 10, "unit": "points" },
+                    "y": { "value": 100, "unit": "points" },
+                    "width": { "value": 80, "unit": "points" },
+                    "height": { "value": 80, "unit": "points" }
+                  },
+                  "value": "https://example.com"
+                },
+                {
+                  "type": "barcode",
+                  "position": {
+                    "x": { "value": 10, "unit": "points" },
+                    "y": { "value": 20, "unit": "points" },
+                    "width": { "value": 180, "unit": "points" },
+                    "height": { "value": 40, "unit": "points" }
+                  },
+                  "value": "PF-100"
+                }
+              ] }]
+            }"##,
+        )
+        .unwrap();
+
+        let Element::QrCode(qr_code) = &template.pages[0].elements[0] else {
+            panic!("expected QR code");
+        };
+        assert_eq!(qr_code.error_correction, QrErrorCorrection::Medium);
+        assert_eq!(qr_code.quiet_zone, 4);
+        assert_eq!(qr_code.background, "#FFFFFF");
+
+        let Element::Barcode(barcode) = &template.pages[0].elements[1] else {
+            panic!("expected barcode");
+        };
+        assert_eq!(barcode.format, BarcodeFormat::Code128);
+        assert_eq!(barcode.quiet_zone, 10);
+        assert_eq!(barcode.color, "#000000");
     }
 }

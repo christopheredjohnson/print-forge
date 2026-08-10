@@ -647,6 +647,13 @@ fn validate_element(
                 position_context,
                 report,
             );
+            if svg.source.trim().is_empty() {
+                report.error(
+                    "svg.empty_source",
+                    format!("{path}.source"),
+                    "SVG asset path cannot be empty",
+                );
+            }
         }
         Element::QrCode(qr_code) => {
             validate_optional_bounds(
@@ -664,6 +671,73 @@ fn validate_element(
                 position_context,
                 report,
             );
+            if qr_code.value.trim().is_empty() {
+                report.error(
+                    "qr_code.empty_value",
+                    format!("{path}.value"),
+                    "QR code value cannot be empty",
+                );
+            }
+            if qr_code.quiet_zone < 4 {
+                report.error(
+                    "qr_code.quiet_zone",
+                    format!("{path}.quiet_zone"),
+                    "QR code quiet zone must be at least 4 modules",
+                );
+            }
+            if let Some(position) = &qr_code.position
+                && (position.width.to_points() - position.height.to_points()).abs() > 0.01
+            {
+                report.error(
+                    "qr_code.not_square",
+                    format!("{path}.position"),
+                    "QR code bounds must be square",
+                );
+            }
+            validate_color(&qr_code.color, format!("{path}.color"), report);
+            validate_color(&qr_code.background, format!("{path}.background"), report);
+        }
+        Element::Barcode(barcode) => {
+            validate_optional_bounds(
+                barcode.position.as_ref(),
+                path,
+                "barcode",
+                canvas,
+                position_context,
+                report,
+            );
+            validate_required_flow_size_hint(
+                barcode.position.as_ref(),
+                path,
+                "barcode",
+                position_context,
+                report,
+            );
+            if barcode.value.trim().is_empty() {
+                report.error(
+                    "barcode.empty_value",
+                    format!("{path}.value"),
+                    "barcode value cannot be empty",
+                );
+            }
+            if barcode.quiet_zone < 10 {
+                report.error(
+                    "barcode.quiet_zone",
+                    format!("{path}.quiet_zone"),
+                    "Code 128 quiet zone must be at least 10 modules",
+                );
+            }
+            if let Some(position) = &barcode.position
+                && position.height.to_points() + 0.01 < 14.4
+            {
+                report.error(
+                    "barcode.too_short",
+                    format!("{path}.position.height"),
+                    "Code 128 bar height must be at least 14.4pt",
+                );
+            }
+            validate_color(&barcode.color, format!("{path}.color"), report);
+            validate_color(&barcode.background, format!("{path}.background"), report);
         }
         Element::Group(group) => {
             if let Some(position) = &group.position {

@@ -12,15 +12,15 @@ use std::{
 use anyhow::{Context, Result, anyhow, bail, ensure};
 use lopdf::{Document as LoDocument, Object, StringFormat};
 use print_forge_engine::{
-    DrawCommand, ImageCommand, LineCommand, LineDash, RectangleCommand, ResolvedDocument,
-    ResolvedFont, StrokeCommand, TextCommand,
+    BarcodeCommand, DrawCommand, ImageCommand, LineCommand, LineDash, QrCodeCommand,
+    RectangleCommand, ResolvedDocument, ResolvedFont, StrokeCommand, SvgCommand, TextCommand,
 };
 use print_forge_template::Color as PrintColor;
 use printpdf::{
     BuiltinFont, Cmyk, Color, CurTransMat, FontId, Line, LineDashPattern, LinePoint, Mm, Op,
     PaintMode, ParsedFont, PdfConformance, PdfDocument, PdfFont, PdfFontHandle, PdfPage,
-    PdfSaveOptions, Point, Pt, RawImage, Rect, Rgb, TextItem, WindingOrder, XObject, XObjectId,
-    XObjectTransform, XmpMetadata,
+    PdfSaveOptions, Point, Pt, RawImage, Rect, Rgb, Svg, TextItem, WindingOrder, XObject,
+    XObjectId, XObjectTransform, XmpMetadata,
 };
 
 pub trait DocumentRenderer {
@@ -87,6 +87,7 @@ impl PdfRenderer {
         configure_metadata(&mut pdf, document, options);
         let mut fonts = BTreeMap::new();
         let mut images = BTreeMap::new();
+        let mut svgs = BTreeMap::new();
         let mut pages = Vec::with_capacity(document.pages.len());
 
         for (page_index, page) in document.pages.iter().enumerate() {
@@ -105,7 +106,9 @@ impl PdfRenderer {
                     DrawCommand::Image(image) => {
                         render_image(image, &mut pdf, &mut images, &mut ops)
                     }
-                    DrawCommand::Svg(_) => Err(anyhow!("SVG rendering is not implemented yet")),
+                    DrawCommand::Svg(svg) => render_svg(svg, &mut pdf, &mut svgs, &mut ops),
+                    DrawCommand::QrCode(qr_code) => render_qr_code(qr_code, &mut ops),
+                    DrawCommand::Barcode(barcode) => render_barcode(barcode, &mut ops),
                 };
 
                 result.with_context(|| {
@@ -606,6 +609,180 @@ fn pdf_font(
 }
 
 #[derive(Debug, Clone)]
+struct SvgResource {
+    id: XObjectId,
+    width: f32,
+    height: f32,
+}
+
+fn render_svg(
+    command: &SvgCommand,
+    pdf: &mut PdfDocument,
+    svgs: &mut BTreeMap<PathBuf, SvgResource>,
+    ops: &mut Vec<Op>,
+) -> Result<()> {
+    let resource = if let Some(resource) = svgs.get(&command.source) {
+        resource.clone()
+    } else {
+        let source = fs::read_to_string(&command.source)
+            .with_context(|| format!("failed to read SVG {}", command.source.display()))?;
+        let mut warnings = Vec::new();
+        let parsed = Svg::parse(&source, &mut warnings).map_err(|error| {
+            anyhow!("failed to parse SVG {}: {error}", command.source.display())
+        })?;
+        let width = parsed
+            .width
+            .ok_or_else(|| anyhow!("SVG {} has no intrinsic width", command.source.display()))?
+            .0 as f32;
+        let height = parsed
+            .height
+            .ok_or_else(|| anyhow!("SVG {} has no intrinsic height", command.source.display()))?
+            .0 as f32;
+        ensure!(
+            width > 0.0 && height > 0.0,
+            "SVG {} must have positive intrinsic dimensions",
+            command.source.display()
+        );
+        let resource = SvgResource {
+            id: pdf.add_xobject(&parsed),
+            width,
+            height,
+        };
+        svgs.insert(command.source.clone(), resource.clone());
+        resource
+    };
+
+    let (scale_x, scale_y) = match command.fit {
+        print_forge_template::ImageFit::Contain => {
+            let scale = (command.bounds.width / resource.width)
+                .min(command.bounds.height / resource.height);
+            (scale, scale)
+        }
+        print_forge_template::ImageFit::Cover => {
+            let scale = (command.bounds.width / resource.width)
+                .max(command.bounds.height / resource.height);
+            (scale, scale)
+        }
+        print_forge_template::ImageFit::Stretch => (
+            command.bounds.width / resource.width,
+            command.bounds.height / resource.height,
+        ),
+    };
+    let placed_width = resource.width * scale_x;
+    let placed_height = resource.height * scale_y;
+    let x = command.bounds.x + (command.bounds.width - placed_width) / 2.0;
+    let y = command.bounds.y + (command.bounds.height - placed_height) / 2.0;
+    ops.push(Op::SaveGraphicsState);
+    if command.fit == print_forge_template::ImageFit::Cover {
+        push_clip_rect(command.bounds, ops);
+    }
+    ops.push(Op::UseXobject {
+        id: resource.id,
+        transform: XObjectTransform {
+            translate_x: Some(Pt(x)),
+            translate_y: Some(Pt(y)),
+            scale_x: Some(scale_x),
+            scale_y: Some(scale_y),
+            dpi: Some(72.0),
+            ..Default::default()
+        },
+    });
+    ops.push(Op::RestoreGraphicsState);
+    Ok(())
+}
+
+fn render_qr_code(command: &QrCodeCommand, ops: &mut Vec<Op>) -> Result<()> {
+    render_code_background(command.bounds, command.background, ops)?;
+    let total_modules = command.size + usize::from(command.quiet_zone) * 2;
+    let module_size = command.bounds.width / total_modules as f32;
+    let quiet = usize::from(command.quiet_zone);
+
+    ops.extend([
+        Op::SaveGraphicsState,
+        Op::SetFillColor {
+            col: pdf_color(command.color),
+        },
+    ]);
+    for y in 0..command.size {
+        let mut x = 0;
+        while x < command.size {
+            if !command.modules[y * command.size + x] {
+                x += 1;
+                continue;
+            }
+            let start = x;
+            while x < command.size && command.modules[y * command.size + x] {
+                x += 1;
+            }
+            ops.push(Op::DrawRectangle {
+                rectangle: Rect {
+                    x: Pt(command.bounds.x + (quiet + start) as f32 * module_size),
+                    y: Pt(command.bounds.y + (quiet + command.size - y - 1) as f32 * module_size),
+                    width: Pt((x - start) as f32 * module_size),
+                    height: Pt(module_size),
+                    mode: Some(PaintMode::Fill),
+                    winding_order: Some(WindingOrder::NonZero),
+                },
+            });
+        }
+    }
+    ops.push(Op::RestoreGraphicsState);
+    Ok(())
+}
+
+fn render_barcode(command: &BarcodeCommand, ops: &mut Vec<Op>) -> Result<()> {
+    render_code_background(command.bounds, command.background, ops)?;
+    let total_modules = command.modules.len() + usize::from(command.quiet_zone) * 2;
+    let module_size = command.bounds.width / total_modules as f32;
+    let quiet = usize::from(command.quiet_zone);
+
+    ops.extend([
+        Op::SaveGraphicsState,
+        Op::SetFillColor {
+            col: pdf_color(command.color),
+        },
+    ]);
+    let mut x = 0;
+    while x < command.modules.len() {
+        if !command.modules[x] {
+            x += 1;
+            continue;
+        }
+        let start = x;
+        while x < command.modules.len() && command.modules[x] {
+            x += 1;
+        }
+        ops.push(Op::DrawRectangle {
+            rectangle: Rect {
+                x: Pt(command.bounds.x + (quiet + start) as f32 * module_size),
+                y: Pt(command.bounds.y),
+                width: Pt((x - start) as f32 * module_size),
+                height: Pt(command.bounds.height),
+                mode: Some(PaintMode::Fill),
+                winding_order: Some(WindingOrder::NonZero),
+            },
+        });
+    }
+    ops.push(Op::RestoreGraphicsState);
+    Ok(())
+}
+
+fn render_code_background(
+    bounds: print_forge_engine::Rect,
+    color: PrintColor,
+    ops: &mut Vec<Op>,
+) -> Result<()> {
+    render_rectangle(
+        &RectangleCommand {
+            bounds,
+            fill: Some(color),
+            stroke: None,
+        },
+        ops,
+    )
+}
+
+#[derive(Debug, Clone)]
 struct ImageResource {
     id: XObjectId,
     width: f32,
@@ -868,6 +1045,21 @@ mod tests {
             .unwrap()
     }
 
+    fn specialty_fixture() -> ResolvedDocument {
+        let template: Template =
+            serde_json::from_str(include_str!("../../../examples/specialty-elements.json"))
+                .unwrap();
+        let rows = serde_json::from_str::<Vec<serde_json::Value>>(include_str!(
+            "../../../examples/specialty-elements-data.json"
+        ))
+        .unwrap();
+        let row = rows[0].as_object().unwrap().clone();
+        let asset_base = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples");
+        BasicLayoutEngine
+            .layout_with_options(&template, &row, &LayoutOptions { asset_base })
+            .unwrap()
+    }
+
     #[test]
     fn renders_a_parseable_pdf() {
         let document = ResolvedDocument {
@@ -950,6 +1142,33 @@ mod tests {
         let error = PdfRenderer.render(&document).unwrap_err().to_string();
 
         assert!(error.contains("page 0, element pages[0].elements[3]"));
+    }
+
+    #[test]
+    fn renders_svg_qr_and_barcode_as_vector_pdf_content() {
+        let bytes = PdfRenderer.render(&specialty_fixture()).unwrap();
+        let parsed = lopdf::Document::load_mem(&bytes).unwrap();
+        let page_id = parsed.get_pages()[&1];
+        let content_bytes = parsed.get_page_content(page_id);
+        let content = String::from_utf8_lossy(&content_bytes);
+        let subtypes = parsed
+            .objects
+            .values()
+            .filter_map(|object| object.as_stream().ok())
+            .filter_map(|stream| stream.dict.get(b"Subtype").ok())
+            .filter_map(|subtype| subtype.as_name().ok())
+            .collect::<Vec<_>>();
+
+        assert!(
+            content.contains(" Do"),
+            "SVG should be invoked as an XObject"
+        );
+        assert!(
+            content.matches(" re").count() > 50,
+            "QR and barcode modules should remain vector rectangles"
+        );
+        assert!(subtypes.contains(&b"Form".as_slice()));
+        assert!(!subtypes.contains(&b"Image".as_slice()));
     }
 
     #[test]
