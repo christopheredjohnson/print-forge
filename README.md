@@ -148,6 +148,12 @@ cargo run -- render examples/flow-layout.json examples/flow-layout-data.json \
 cargo run -- render examples/table-invoice.json examples/table-invoice-data.json \
   output/pdf/table-invoice.pdf
 
+# Render a print-ready three-column flight checklist with ruled notes.
+cargo run -- render examples/flight-checklist.json \
+  examples/flight-checklist-data.json \
+  output/pdf/flight-checklist.pdf \
+  --print-ready
+
 # Render vector SVG, QR, and Code 128 specialty elements.
 cargo run -- render examples/specialty-elements.json \
   examples/specialty-elements-data.json \
