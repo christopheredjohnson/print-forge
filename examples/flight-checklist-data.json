@@ -3,6 +3,13 @@
     "checklist_title": "PIPER PA-28-180",
     "checklist_subtitle": "NORMAL OPERATIONS / QUICK REFERENCE",
     "aircraft_id": "N________",
-    "notes_prompt": "Weather / fuel / route / maintenance reminders"
+    "walkaround_items": ["Hobbs", "A.R.O.W.", "Fuel"],
+    "taxi_items": ["ATIS", "Instruments", "Clearance"],
+    "run_up_items": ["2000 RPM", "L/R Magnetos", "Carb Heat"],
+    "pre_takeoff_items": ["Full Rich", "Landing Light", "Fuel Pump"],
+    "climb_items": ["Landing Light", "80 kts."],
+    "cruise_items": ["Lean Mixture", "Fuel Pump Off"],
+    "notes_prompt": "IMPORTANT THINGS TO REMEMBER",
+    "notes": "Verify this quick-reference card against the current approved POH/AFM before use.\n\nWeather / winds:\nFuel plan:\nRoute / alternates:\nMaintenance reminders:"
   }
 ]

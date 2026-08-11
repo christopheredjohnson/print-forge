@@ -148,7 +148,8 @@ cargo run -- render examples/flow-layout.json examples/flow-layout-data.json \
 cargo run -- render examples/table-invoice.json examples/table-invoice-data.json \
   output/pdf/table-invoice.pdf
 
-# Render a print-ready three-column flight checklist with ruled notes.
+# Render a print-ready three-column flight checklist.
+# Its six checklist sections and multiline notes are populated from the data JSON.
 cargo run -- render examples/flight-checklist.json \
   examples/flight-checklist-data.json \
   output/pdf/flight-checklist.pdf \
