@@ -505,9 +505,24 @@ fn validate_metadata(metadata: &DocumentMetadata, report: &mut ValidationReport)
 }
 
 fn validate_color(value: &str, path: impl Into<String>, report: &mut ValidationReport) {
+    if is_template_variable(value) {
+        return;
+    }
     if let Err(error) = value.parse::<Color>() {
         report.error("color.invalid", path, error.to_string());
     }
+}
+
+fn is_template_variable(value: &str) -> bool {
+    let value = value.trim();
+    let Some(variable) = value
+        .strip_prefix("{{")
+        .and_then(|value| value.strip_suffix("}}"))
+    else {
+        return false;
+    };
+    let variable = variable.trim();
+    !variable.is_empty() && !variable.contains("{{") && !variable.contains("}}")
 }
 
 fn validate_page(page: &Page, page_index: usize, canvas: Canvas, report: &mut ValidationReport) {

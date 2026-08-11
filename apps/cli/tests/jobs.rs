@@ -330,31 +330,45 @@ fn mvp_table_fixture_wraps_rows_and_paginates() {
 }
 
 #[test]
-fn flight_checklist_fixture_renders_as_one_print_ready_page() {
+fn flight_checklist_theme_fixtures_render_as_one_print_ready_page() {
     let directory = TestDir::new("flight-checklist-job");
     let examples = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples");
     let template = examples.join("flight-checklist.json");
-    let dataset = examples.join("flight-checklist-data.json");
-    let pdf = directory.path().join("flight-checklist.pdf");
-    let output = run(&[
-        "render",
-        template.to_str().unwrap(),
-        dataset.to_str().unwrap(),
-        pdf.to_str().unwrap(),
-        "--print-ready",
-    ]);
+    for dataset_name in [
+        "flight-checklist-data.json",
+        "flight-checklist-data-harbor.json",
+        "flight-checklist-data-cider.json",
+        "flight-checklist-data-mulberry.json",
+    ] {
+        let dataset = examples.join(dataset_name);
+        let pdf = directory.path().join(format!("{dataset_name}.pdf"));
+        let output = run(&[
+            "render",
+            template.to_str().unwrap(),
+            dataset.to_str().unwrap(),
+            pdf.to_str().unwrap(),
+            "--print-ready",
+        ]);
 
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert_eq!(page_count(&pdf), 1);
-    let parsed = lopdf::Document::load(&pdf).unwrap();
-    let page = parsed.get_dictionary(parsed.get_pages()[&1]).unwrap();
-    assert_eq!(parsed.version, "1.6");
-    assert!(parsed.catalog().unwrap().has(b"OutputIntents"));
-    assert_eq!(page.get(b"MediaBox").unwrap().as_array().unwrap().len(), 4);
+        assert!(
+            output.status.success(),
+            "{dataset_name}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(page_count(&pdf), 1, "{dataset_name}");
+        let parsed = lopdf::Document::load(&pdf).unwrap();
+        let page = parsed.get_dictionary(parsed.get_pages()[&1]).unwrap();
+        assert_eq!(parsed.version, "1.6", "{dataset_name}");
+        assert!(
+            parsed.catalog().unwrap().has(b"OutputIntents"),
+            "{dataset_name}"
+        );
+        assert_eq!(
+            page.get(b"MediaBox").unwrap().as_array().unwrap().len(),
+            4,
+            "{dataset_name}"
+        );
+    }
 }
 
 #[test]

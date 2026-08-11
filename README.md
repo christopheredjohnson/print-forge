@@ -169,6 +169,12 @@ cargo run -- render examples/product-catalog.json examples/product-catalog-data.
   output/pdf/product-catalog.pdf
 ```
 
+The flight checklist reads its palette from the nested `theme` object in the data JSON. The
+default dataset uses **Spruce Ledger**; ready-to-render **Harbor Blue**, **Cider Note**, and
+**Mulberry Ink** presets are available in `examples/flight-checklist-data-{harbor,cider,mulberry}.json`.
+Copy a preset's `theme` object into your checklist data to change its appearance without editing
+the template.
+
 ## Output and template behavior
 
 ### Position, rotation, and paint order

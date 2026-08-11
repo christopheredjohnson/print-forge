@@ -22,7 +22,16 @@
     { "name": "climb_items", "field_type": "collection", "required": true },
     { "name": "cruise_items", "field_type": "collection", "required": true },
     { "name": "notes_prompt", "field_type": "text", "required": true },
-    { "name": "notes", "field_type": "text", "required": true }
+    { "name": "notes", "field_type": "text", "required": true },
+    { "name": "theme.name", "field_type": "text", "required": true },
+    { "name": "theme.paper", "field_type": "text", "required": true },
+    { "name": "theme.ink", "field_type": "text", "required": true },
+    { "name": "theme.primary", "field_type": "text", "required": true },
+    { "name": "theme.section", "field_type": "text", "required": true },
+    { "name": "theme.accent", "field_type": "text", "required": true },
+    { "name": "theme.secondary", "field_type": "text", "required": true },
+    { "name": "theme.muted", "field_type": "text", "required": true },
+    { "name": "theme.border", "field_type": "text", "required": true }
   ],
   "fonts": [
     {
@@ -44,10 +53,10 @@
             "width": { "value": 440, "unit": "points" },
             "height": { "value": 620, "unit": "points" }
           },
-          "fill": "#FFFDF8",
+          "fill": "{{theme.paper}}",
           "stroke": {
             "width": { "value": 0.8, "unit": "points" },
-            "color": "#18323E"
+            "color": "{{theme.ink}}"
           }
         },
         {
@@ -58,7 +67,7 @@
             "width": { "value": 440, "unit": "points" },
             "height": { "value": 70, "unit": "points" }
           },
-          "fill": "#18323E"
+          "fill": "{{theme.primary}}"
         },
         {
           "type": "rectangle",
@@ -68,7 +77,7 @@
             "width": { "value": 7, "unit": "points" },
             "height": { "value": 70, "unit": "points" }
           },
-          "fill": "#E19A48"
+          "fill": "{{theme.accent}}"
         },
         {
           "type": "text",
@@ -97,7 +106,7 @@
           "font": "Helvetica",
           "font_size": { "value": 8, "unit": "points" },
           "overflow": "shrink",
-          "color": "#B8D7D1"
+          "color": "{{theme.secondary}}"
         },
         {
           "type": "text",
@@ -127,7 +136,7 @@
           "font": "Helvetica",
           "font_size": { "value": 6.5, "unit": "points" },
           "align": "right",
-          "color": "#B8D7D1"
+          "color": "{{theme.secondary}}"
         },
         {
           "type": "text",
@@ -141,7 +150,7 @@
           "font": "Helvetica",
           "font_style": "bold",
           "font_size": { "value": 6.8, "unit": "points" },
-          "color": "#6A7C82"
+          "color": "{{theme.muted}}"
         },
         {
           "type": "group",
@@ -156,7 +165,7 @@
               "type": "rectangle",
               "position": { "x": { "value": 0, "unit": "points" }, "y": { "value": 0, "unit": "points" }, "width": { "value": 132, "unit": "points" }, "height": { "value": 226, "unit": "points" } },
               "fill": "#FFFFFF",
-              "stroke": { "width": { "value": 0.7, "unit": "points" }, "color": "#A9BBB8" }
+              "stroke": { "width": { "value": 0.7, "unit": "points" }, "color": "{{theme.border}}" }
             },
             {
               "type": "text",
@@ -165,12 +174,12 @@
               "font": "Helvetica",
               "font_style": "bold",
               "font_size": { "value": 7, "unit": "points" },
-              "color": "#E19A48"
+              "color": "{{theme.accent}}"
             },
             {
               "type": "rectangle",
               "position": { "x": { "value": 0, "unit": "points" }, "y": { "value": 174, "unit": "points" }, "width": { "value": 132, "unit": "points" }, "height": { "value": 22, "unit": "points" } },
-              "fill": "#147D75"
+              "fill": "{{theme.section}}"
             },
             {
               "type": "text",
@@ -184,7 +193,7 @@
             {
               "type": "rectangle",
               "position": { "x": { "value": 0, "unit": "points" }, "y": { "value": 88, "unit": "points" }, "width": { "value": 132, "unit": "points" }, "height": { "value": 22, "unit": "points" } },
-              "fill": "#147D75"
+              "fill": "{{theme.section}}"
             },
             { "type": "text", "position": { "x": { "value": 10, "unit": "points" }, "y": { "value": 94, "unit": "points" }, "width": { "value": 112, "unit": "points" }, "height": { "value": 10, "unit": "points" } }, "value": "TAXI", "font": "Helvetica", "font_style": "bold", "font_size": { "value": 8, "unit": "points" }, "color": "#FFFFFF" }
           ]
@@ -198,11 +207,11 @@
             "height": { "value": 226, "unit": "points" }
           },
           "children": [
-            { "type": "rectangle", "position": { "x": { "value": 0, "unit": "points" }, "y": { "value": 0, "unit": "points" }, "width": { "value": 132, "unit": "points" }, "height": { "value": 226, "unit": "points" } }, "fill": "#FFFFFF", "stroke": { "width": { "value": 0.7, "unit": "points" }, "color": "#A9BBB8" } },
-            { "type": "text", "position": { "x": { "value": 10, "unit": "points" }, "y": { "value": 204, "unit": "points" }, "width": { "value": 112, "unit": "points" }, "height": { "value": 10, "unit": "points" } }, "value": "02  /  DEPARTURE", "font": "Helvetica", "font_style": "bold", "font_size": { "value": 7, "unit": "points" }, "color": "#E19A48" },
-            { "type": "rectangle", "position": { "x": { "value": 0, "unit": "points" }, "y": { "value": 174, "unit": "points" }, "width": { "value": 132, "unit": "points" }, "height": { "value": 22, "unit": "points" } }, "fill": "#147D75" },
+            { "type": "rectangle", "position": { "x": { "value": 0, "unit": "points" }, "y": { "value": 0, "unit": "points" }, "width": { "value": 132, "unit": "points" }, "height": { "value": 226, "unit": "points" } }, "fill": "#FFFFFF", "stroke": { "width": { "value": 0.7, "unit": "points" }, "color": "{{theme.border}}" } },
+            { "type": "text", "position": { "x": { "value": 10, "unit": "points" }, "y": { "value": 204, "unit": "points" }, "width": { "value": 112, "unit": "points" }, "height": { "value": 10, "unit": "points" } }, "value": "02  /  DEPARTURE", "font": "Helvetica", "font_style": "bold", "font_size": { "value": 7, "unit": "points" }, "color": "{{theme.accent}}" },
+            { "type": "rectangle", "position": { "x": { "value": 0, "unit": "points" }, "y": { "value": 174, "unit": "points" }, "width": { "value": 132, "unit": "points" }, "height": { "value": 22, "unit": "points" } }, "fill": "{{theme.section}}" },
             { "type": "text", "position": { "x": { "value": 10, "unit": "points" }, "y": { "value": 180, "unit": "points" }, "width": { "value": 112, "unit": "points" }, "height": { "value": 10, "unit": "points" } }, "value": "RUN-UP", "font": "Helvetica", "font_style": "bold", "font_size": { "value": 8, "unit": "points" }, "color": "#FFFFFF" },
-            { "type": "rectangle", "position": { "x": { "value": 0, "unit": "points" }, "y": { "value": 88, "unit": "points" }, "width": { "value": 132, "unit": "points" }, "height": { "value": 22, "unit": "points" } }, "fill": "#147D75" },
+            { "type": "rectangle", "position": { "x": { "value": 0, "unit": "points" }, "y": { "value": 88, "unit": "points" }, "width": { "value": 132, "unit": "points" }, "height": { "value": 22, "unit": "points" } }, "fill": "{{theme.section}}" },
             { "type": "text", "position": { "x": { "value": 10, "unit": "points" }, "y": { "value": 94, "unit": "points" }, "width": { "value": 112, "unit": "points" }, "height": { "value": 10, "unit": "points" } }, "value": "PRE-TAKEOFF", "font": "Helvetica", "font_style": "bold", "font_size": { "value": 8, "unit": "points" }, "color": "#FFFFFF" }
           ]
         },
@@ -215,13 +224,13 @@
             "height": { "value": 226, "unit": "points" }
           },
           "children": [
-            { "type": "rectangle", "position": { "x": { "value": 0, "unit": "points" }, "y": { "value": 0, "unit": "points" }, "width": { "value": 132, "unit": "points" }, "height": { "value": 226, "unit": "points" } }, "fill": "#FFFFFF", "stroke": { "width": { "value": 0.7, "unit": "points" }, "color": "#A9BBB8" } },
-            { "type": "text", "position": { "x": { "value": 10, "unit": "points" }, "y": { "value": 204, "unit": "points" }, "width": { "value": 112, "unit": "points" }, "height": { "value": 10, "unit": "points" } }, "value": "03  /  FLIGHT", "font": "Helvetica", "font_style": "bold", "font_size": { "value": 7, "unit": "points" }, "color": "#E19A48" },
-            { "type": "rectangle", "position": { "x": { "value": 0, "unit": "points" }, "y": { "value": 174, "unit": "points" }, "width": { "value": 132, "unit": "points" }, "height": { "value": 22, "unit": "points" } }, "fill": "#147D75" },
+            { "type": "rectangle", "position": { "x": { "value": 0, "unit": "points" }, "y": { "value": 0, "unit": "points" }, "width": { "value": 132, "unit": "points" }, "height": { "value": 226, "unit": "points" } }, "fill": "#FFFFFF", "stroke": { "width": { "value": 0.7, "unit": "points" }, "color": "{{theme.border}}" } },
+            { "type": "text", "position": { "x": { "value": 10, "unit": "points" }, "y": { "value": 204, "unit": "points" }, "width": { "value": 112, "unit": "points" }, "height": { "value": 10, "unit": "points" } }, "value": "03  /  FLIGHT", "font": "Helvetica", "font_style": "bold", "font_size": { "value": 7, "unit": "points" }, "color": "{{theme.accent}}" },
+            { "type": "rectangle", "position": { "x": { "value": 0, "unit": "points" }, "y": { "value": 174, "unit": "points" }, "width": { "value": 132, "unit": "points" }, "height": { "value": 22, "unit": "points" } }, "fill": "{{theme.section}}" },
             { "type": "text", "position": { "x": { "value": 10, "unit": "points" }, "y": { "value": 180, "unit": "points" }, "width": { "value": 112, "unit": "points" }, "height": { "value": 10, "unit": "points" } }, "value": "CLIMB", "font": "Helvetica", "font_style": "bold", "font_size": { "value": 8, "unit": "points" }, "color": "#FFFFFF" },
-            { "type": "rectangle", "position": { "x": { "value": 0, "unit": "points" }, "y": { "value": 88, "unit": "points" }, "width": { "value": 132, "unit": "points" }, "height": { "value": 22, "unit": "points" } }, "fill": "#147D75" },
+            { "type": "rectangle", "position": { "x": { "value": 0, "unit": "points" }, "y": { "value": 88, "unit": "points" }, "width": { "value": 132, "unit": "points" }, "height": { "value": 22, "unit": "points" } }, "fill": "{{theme.section}}" },
             { "type": "text", "position": { "x": { "value": 10, "unit": "points" }, "y": { "value": 94, "unit": "points" }, "width": { "value": 112, "unit": "points" }, "height": { "value": 10, "unit": "points" } }, "value": "CRUISE", "font": "Helvetica", "font_style": "bold", "font_size": { "value": 8, "unit": "points" }, "color": "#FFFFFF" },
-            { "type": "text", "position": { "x": { "value": 10, "unit": "points" }, "y": { "value": 18, "unit": "points" }, "width": { "value": 112, "unit": "points" }, "height": { "value": 18, "unit": "points" } }, "value": "Continue with the aircraft-specific approved checklist.", "font": "Helvetica", "font_style": "italic", "font_size": { "value": 6.5, "unit": "points" }, "line_height": { "value": 8, "unit": "points" }, "overflow": "shrink", "color": "#6A7C82" }
+            { "type": "text", "position": { "x": { "value": 10, "unit": "points" }, "y": { "value": 18, "unit": "points" }, "width": { "value": 112, "unit": "points" }, "height": { "value": 18, "unit": "points" } }, "value": "Continue with the aircraft-specific approved checklist.", "font": "Helvetica", "font_style": "italic", "font_size": { "value": 6.5, "unit": "points" }, "line_height": { "value": 8, "unit": "points" }, "overflow": "shrink", "color": "{{theme.muted}}" }
           ]
         },
         {
@@ -232,8 +241,8 @@
             "type": "group",
             "position": { "x": { "value": 34, "unit": "points" }, "y": { "value": 463, "unit": "points" }, "width": { "value": 112, "unit": "points" }, "height": { "value": 17, "unit": "points" } },
             "children": [
-              { "type": "rectangle", "position": { "x": { "value": 0, "unit": "points" }, "y": { "value": 7, "unit": "points" }, "width": { "value": 6, "unit": "points" }, "height": { "value": 6, "unit": "points" } }, "stroke": { "width": { "value": 0.8, "unit": "points" }, "color": "#147D75" } },
-              { "type": "text", "position": { "x": { "value": 13, "unit": "points" }, "y": { "value": 3, "unit": "points" }, "width": { "value": 99, "unit": "points" }, "height": { "value": 12, "unit": "points" } }, "value": "{{item}}", "font": "Helvetica", "font_size": { "value": 8.5, "unit": "points" }, "overflow": "shrink", "color": "#18323E" }
+              { "type": "rectangle", "position": { "x": { "value": 0, "unit": "points" }, "y": { "value": 7, "unit": "points" }, "width": { "value": 6, "unit": "points" }, "height": { "value": 6, "unit": "points" } }, "stroke": { "width": { "value": 0.8, "unit": "points" }, "color": "{{theme.section}}" } },
+              { "type": "text", "position": { "x": { "value": 13, "unit": "points" }, "y": { "value": 3, "unit": "points" }, "width": { "value": 99, "unit": "points" }, "height": { "value": 12, "unit": "points" } }, "value": "{{item}}", "font": "Helvetica", "font_size": { "value": 8.5, "unit": "points" }, "overflow": "shrink", "color": "{{theme.ink}}" }
             ]
           }
         },
@@ -245,8 +254,8 @@
             "type": "group",
             "position": { "x": { "value": 34, "unit": "points" }, "y": { "value": 377, "unit": "points" }, "width": { "value": 112, "unit": "points" }, "height": { "value": 17, "unit": "points" } },
             "children": [
-              { "type": "rectangle", "position": { "x": { "value": 0, "unit": "points" }, "y": { "value": 7, "unit": "points" }, "width": { "value": 6, "unit": "points" }, "height": { "value": 6, "unit": "points" } }, "stroke": { "width": { "value": 0.8, "unit": "points" }, "color": "#147D75" } },
-              { "type": "text", "position": { "x": { "value": 13, "unit": "points" }, "y": { "value": 3, "unit": "points" }, "width": { "value": 99, "unit": "points" }, "height": { "value": 12, "unit": "points" } }, "value": "{{item}}", "font": "Helvetica", "font_size": { "value": 8.5, "unit": "points" }, "overflow": "shrink", "color": "#18323E" }
+              { "type": "rectangle", "position": { "x": { "value": 0, "unit": "points" }, "y": { "value": 7, "unit": "points" }, "width": { "value": 6, "unit": "points" }, "height": { "value": 6, "unit": "points" } }, "stroke": { "width": { "value": 0.8, "unit": "points" }, "color": "{{theme.section}}" } },
+              { "type": "text", "position": { "x": { "value": 13, "unit": "points" }, "y": { "value": 3, "unit": "points" }, "width": { "value": 99, "unit": "points" }, "height": { "value": 12, "unit": "points" } }, "value": "{{item}}", "font": "Helvetica", "font_size": { "value": 8.5, "unit": "points" }, "overflow": "shrink", "color": "{{theme.ink}}" }
             ]
           }
         },
@@ -258,8 +267,8 @@
             "type": "group",
             "position": { "x": { "value": 178, "unit": "points" }, "y": { "value": 463, "unit": "points" }, "width": { "value": 112, "unit": "points" }, "height": { "value": 17, "unit": "points" } },
             "children": [
-              { "type": "rectangle", "position": { "x": { "value": 0, "unit": "points" }, "y": { "value": 7, "unit": "points" }, "width": { "value": 6, "unit": "points" }, "height": { "value": 6, "unit": "points" } }, "stroke": { "width": { "value": 0.8, "unit": "points" }, "color": "#147D75" } },
-              { "type": "text", "position": { "x": { "value": 13, "unit": "points" }, "y": { "value": 3, "unit": "points" }, "width": { "value": 99, "unit": "points" }, "height": { "value": 12, "unit": "points" } }, "value": "{{item}}", "font": "Helvetica", "font_size": { "value": 8.5, "unit": "points" }, "overflow": "shrink", "color": "#18323E" }
+              { "type": "rectangle", "position": { "x": { "value": 0, "unit": "points" }, "y": { "value": 7, "unit": "points" }, "width": { "value": 6, "unit": "points" }, "height": { "value": 6, "unit": "points" } }, "stroke": { "width": { "value": 0.8, "unit": "points" }, "color": "{{theme.section}}" } },
+              { "type": "text", "position": { "x": { "value": 13, "unit": "points" }, "y": { "value": 3, "unit": "points" }, "width": { "value": 99, "unit": "points" }, "height": { "value": 12, "unit": "points" } }, "value": "{{item}}", "font": "Helvetica", "font_size": { "value": 8.5, "unit": "points" }, "overflow": "shrink", "color": "{{theme.ink}}" }
             ]
           }
         },
@@ -271,8 +280,8 @@
             "type": "group",
             "position": { "x": { "value": 178, "unit": "points" }, "y": { "value": 377, "unit": "points" }, "width": { "value": 112, "unit": "points" }, "height": { "value": 17, "unit": "points" } },
             "children": [
-              { "type": "rectangle", "position": { "x": { "value": 0, "unit": "points" }, "y": { "value": 7, "unit": "points" }, "width": { "value": 6, "unit": "points" }, "height": { "value": 6, "unit": "points" } }, "stroke": { "width": { "value": 0.8, "unit": "points" }, "color": "#147D75" } },
-              { "type": "text", "position": { "x": { "value": 13, "unit": "points" }, "y": { "value": 3, "unit": "points" }, "width": { "value": 99, "unit": "points" }, "height": { "value": 12, "unit": "points" } }, "value": "{{item}}", "font": "Helvetica", "font_size": { "value": 8.5, "unit": "points" }, "overflow": "shrink", "color": "#18323E" }
+              { "type": "rectangle", "position": { "x": { "value": 0, "unit": "points" }, "y": { "value": 7, "unit": "points" }, "width": { "value": 6, "unit": "points" }, "height": { "value": 6, "unit": "points" } }, "stroke": { "width": { "value": 0.8, "unit": "points" }, "color": "{{theme.section}}" } },
+              { "type": "text", "position": { "x": { "value": 13, "unit": "points" }, "y": { "value": 3, "unit": "points" }, "width": { "value": 99, "unit": "points" }, "height": { "value": 12, "unit": "points" } }, "value": "{{item}}", "font": "Helvetica", "font_size": { "value": 8.5, "unit": "points" }, "overflow": "shrink", "color": "{{theme.ink}}" }
             ]
           }
         },
@@ -284,8 +293,8 @@
             "type": "group",
             "position": { "x": { "value": 322, "unit": "points" }, "y": { "value": 463, "unit": "points" }, "width": { "value": 112, "unit": "points" }, "height": { "value": 17, "unit": "points" } },
             "children": [
-              { "type": "rectangle", "position": { "x": { "value": 0, "unit": "points" }, "y": { "value": 7, "unit": "points" }, "width": { "value": 6, "unit": "points" }, "height": { "value": 6, "unit": "points" } }, "stroke": { "width": { "value": 0.8, "unit": "points" }, "color": "#147D75" } },
-              { "type": "text", "position": { "x": { "value": 13, "unit": "points" }, "y": { "value": 3, "unit": "points" }, "width": { "value": 99, "unit": "points" }, "height": { "value": 12, "unit": "points" } }, "value": "{{item}}", "font": "Helvetica", "font_size": { "value": 8.5, "unit": "points" }, "overflow": "shrink", "color": "#18323E" }
+              { "type": "rectangle", "position": { "x": { "value": 0, "unit": "points" }, "y": { "value": 7, "unit": "points" }, "width": { "value": 6, "unit": "points" }, "height": { "value": 6, "unit": "points" } }, "stroke": { "width": { "value": 0.8, "unit": "points" }, "color": "{{theme.section}}" } },
+              { "type": "text", "position": { "x": { "value": 13, "unit": "points" }, "y": { "value": 3, "unit": "points" }, "width": { "value": 99, "unit": "points" }, "height": { "value": 12, "unit": "points" } }, "value": "{{item}}", "font": "Helvetica", "font_size": { "value": 8.5, "unit": "points" }, "overflow": "shrink", "color": "{{theme.ink}}" }
             ]
           }
         },
@@ -297,8 +306,8 @@
             "type": "group",
             "position": { "x": { "value": 322, "unit": "points" }, "y": { "value": 377, "unit": "points" }, "width": { "value": 112, "unit": "points" }, "height": { "value": 17, "unit": "points" } },
             "children": [
-              { "type": "rectangle", "position": { "x": { "value": 0, "unit": "points" }, "y": { "value": 7, "unit": "points" }, "width": { "value": 6, "unit": "points" }, "height": { "value": 6, "unit": "points" } }, "stroke": { "width": { "value": 0.8, "unit": "points" }, "color": "#147D75" } },
-              { "type": "text", "position": { "x": { "value": 13, "unit": "points" }, "y": { "value": 3, "unit": "points" }, "width": { "value": 99, "unit": "points" }, "height": { "value": 12, "unit": "points" } }, "value": "{{item}}", "font": "Helvetica", "font_size": { "value": 8.5, "unit": "points" }, "overflow": "shrink", "color": "#18323E" }
+              { "type": "rectangle", "position": { "x": { "value": 0, "unit": "points" }, "y": { "value": 7, "unit": "points" }, "width": { "value": 6, "unit": "points" }, "height": { "value": 6, "unit": "points" } }, "stroke": { "width": { "value": 0.8, "unit": "points" }, "color": "{{theme.section}}" } },
+              { "type": "text", "position": { "x": { "value": 13, "unit": "points" }, "y": { "value": 3, "unit": "points" }, "width": { "value": 99, "unit": "points" }, "height": { "value": 12, "unit": "points" } }, "value": "{{item}}", "font": "Helvetica", "font_size": { "value": 8.5, "unit": "points" }, "overflow": "shrink", "color": "{{theme.ink}}" }
             ]
           }
         },
@@ -306,17 +315,17 @@
           "type": "rectangle",
           "position": { "x": { "value": 24, "unit": "points" }, "y": { "value": 56, "unit": "points" }, "width": { "value": 420, "unit": "points" }, "height": { "value": 234, "unit": "points" } },
           "fill": "#FFFFFF",
-          "stroke": { "width": { "value": 0.8, "unit": "points" }, "color": "#18323E" }
+          "stroke": { "width": { "value": 0.8, "unit": "points" }, "color": "{{theme.ink}}" }
         },
         {
           "type": "rectangle",
           "position": { "x": { "value": 24, "unit": "points" }, "y": { "value": 260, "unit": "points" }, "width": { "value": 420, "unit": "points" }, "height": { "value": 30, "unit": "points" } },
-          "fill": "#18323E"
+          "fill": "{{theme.primary}}"
         },
         {
           "type": "rectangle",
           "position": { "x": { "value": 24, "unit": "points" }, "y": { "value": 260, "unit": "points" }, "width": { "value": 7, "unit": "points" }, "height": { "value": 30, "unit": "points" } },
-          "fill": "#E19A48"
+          "fill": "{{theme.accent}}"
         },
         {
           "type": "text",
@@ -335,7 +344,7 @@
           "font_size": { "value": 6.5, "unit": "points" },
           "align": "right",
           "overflow": "shrink",
-          "color": "#B8D7D1"
+          "color": "{{theme.secondary}}"
         },
         {
           "type": "text",
@@ -345,7 +354,7 @@
           "font_size": { "value": 8, "unit": "points" },
           "line_height": { "value": 11, "unit": "points" },
           "overflow": "shrink",
-          "color": "#18323E"
+          "color": "{{theme.ink}}"
         },
         {
           "type": "text",
@@ -356,7 +365,7 @@
           "font_size": { "value": 6.2, "unit": "points" },
           "align": "center",
           "overflow": "shrink",
-          "color": "#6A7C82"
+          "color": "{{theme.muted}}"
         }
       ]
     }

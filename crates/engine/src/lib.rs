@@ -507,7 +507,7 @@ fn layout_group(
                         y: group_bounds.y + line.y2.to_points(),
                     },
                     width_pt: line.width.to_points(),
-                    color: resolve_color(&line.color)?,
+                    color: resolve_color(&line.color, data)?,
                     dash: resolve_dash(line.dash),
                 }),
             }]),
@@ -1009,23 +1009,27 @@ fn layout_table(
     )?;
     let body_metrics = FontMetrics::load(&body_font)?;
     let header_metrics = FontMetrics::load(&header_font)?;
-    let text_color = resolve_color(&table.color)?;
+    let text_color = resolve_color(&table.color, data)?;
     let header_background = table
         .header_background
         .as_deref()
-        .map(resolve_color)
+        .map(|value| resolve_color(value, data))
         .transpose()?;
     let row_background = table
         .row_background
         .as_deref()
-        .map(resolve_color)
+        .map(|value| resolve_color(value, data))
         .transpose()?;
     let alternate_background = table
         .alternate_row_background
         .as_deref()
-        .map(resolve_color)
+        .map(|value| resolve_color(value, data))
         .transpose()?;
-    let border = table.border.as_ref().map(resolve_stroke).transpose()?;
+    let border = table
+        .border
+        .as_ref()
+        .map(|stroke| resolve_stroke(stroke, data))
+        .transpose()?;
 
     let formatted_rows = rows
         .iter()
@@ -1823,7 +1827,7 @@ fn layout_element_at(
                 line_height_pt: laid_out.line_height_pt,
                 align: text.align,
                 font,
-                color: resolve_color(&text.color)?,
+                color: resolve_color(&text.color, data)?,
                 clip: text.overflow == TextOverflow::Clip,
             }))
         }
@@ -1848,8 +1852,16 @@ fn layout_element_at(
 
             Ok(DrawCommand::Rectangle(RectangleCommand {
                 bounds,
-                fill: rectangle.fill.as_deref().map(resolve_color).transpose()?,
-                stroke: rectangle.stroke.as_ref().map(resolve_stroke).transpose()?,
+                fill: rectangle
+                    .fill
+                    .as_deref()
+                    .map(|value| resolve_color(value, data))
+                    .transpose()?,
+                stroke: rectangle
+                    .stroke
+                    .as_ref()
+                    .map(|stroke| resolve_stroke(stroke, data))
+                    .transpose()?,
             }))
         }
         Element::Line(line) => {
@@ -1868,7 +1880,7 @@ fn layout_element_at(
                     y: line.y2.to_points(),
                 },
                 width_pt: line.width.to_points(),
-                color: resolve_color(&line.color)?,
+                color: resolve_color(&line.color, data)?,
                 dash: resolve_dash(line.dash),
             }))
         }
@@ -1966,8 +1978,8 @@ fn build_qr_code_command(
         size,
         modules,
         quiet_zone: element.quiet_zone,
-        color: resolve_color(&element.color)?,
-        background: resolve_color(&element.background)?,
+        color: resolve_color(&element.color, data)?,
+        background: resolve_color(&element.background, data)?,
     })
 }
 
@@ -2018,8 +2030,8 @@ fn build_barcode_command(
         bounds,
         modules,
         quiet_zone: element.quiet_zone,
-        color: resolve_color(&element.color)?,
-        background: resolve_color(&element.background)?,
+        color: resolve_color(&element.color, data)?,
+        background: resolve_color(&element.background, data)?,
     })
 }
 
@@ -2419,17 +2431,20 @@ fn resolve_bounds(bounds: &print_forge_template::Bounds) -> Rect {
     }
 }
 
-fn resolve_stroke(stroke: &Stroke) -> Result<StrokeCommand, ElementLayoutError> {
+fn resolve_stroke(stroke: &Stroke, data: &DataRow) -> Result<StrokeCommand, ElementLayoutError> {
     Ok(StrokeCommand {
         width_pt: stroke.width.to_points(),
-        color: resolve_color(&stroke.color)?,
+        color: resolve_color(&stroke.color, data)?,
         dash: resolve_dash(stroke.dash),
     })
 }
 
-fn resolve_color(value: &str) -> Result<Color, ElementLayoutError> {
-    value.parse::<Color>().map_err(|error| {
-        ElementLayoutError::InvalidLayout(format!("invalid color {value:?}: {error}"))
+fn resolve_color(value: &str, data: &DataRow) -> Result<Color, ElementLayoutError> {
+    let resolved = resolve_string(value, data)?;
+    resolved.parse::<Color>().map_err(|error| {
+        ElementLayoutError::InvalidLayout(format!(
+            "invalid color {resolved:?} resolved from {value:?}: {error}"
+        ))
     })
 }
 
@@ -2537,7 +2552,8 @@ mod tests {
 
     use print_forge_dataset::DataRow;
     use print_forge_template::{
-        Element, FlowOverflow, TableDateStyle, TableValueFormat, Template, TextAlign, TextOverflow,
+        Color, Element, FlowOverflow, TableDateStyle, TableValueFormat, Template, TextAlign,
+        TextOverflow,
     };
     use serde_json::json;
 
@@ -2587,6 +2603,62 @@ mod tests {
         assert_eq!(text.lines[0].value, "Ada — Engineer");
         assert_eq!(text.bounds.x, 72.0);
         assert_eq!(document.pages[0].commands[0].rotation, 30.0);
+    }
+
+    #[test]
+    fn resolves_data_driven_colors_into_draw_commands() {
+        let template: Template = serde_json::from_str(
+            r##"{
+              "name": "Themed card",
+              "document": {
+                "width": { "value": 100, "unit": "points" },
+                "height": { "value": 100, "unit": "points" }
+              },
+              "pages": [{ "elements": [{
+                "type": "rectangle",
+                "position": {
+                  "x": { "value": 10, "unit": "points" },
+                  "y": { "value": 10, "unit": "points" },
+                  "width": { "value": 80, "unit": "points" },
+                  "height": { "value": 80, "unit": "points" }
+                },
+                "fill": "{{theme_primary}}",
+                "stroke": {
+                  "width": { "value": 1, "unit": "points" },
+                  "color": "{{theme_accent}}"
+                }
+              }] }]
+            }"##,
+        )
+        .unwrap();
+        let data: DataRow = serde_json::from_value(json!({
+            "theme_primary": "#174A73",
+            "theme_accent": "cmyk(0%, 40%, 80%, 0%)"
+        }))
+        .unwrap();
+
+        let document = BasicLayoutEngine.layout(&template, &data).unwrap();
+        let DrawCommand::Rectangle(rectangle) = &document.pages[0].commands[0].command else {
+            panic!("expected rectangle command");
+        };
+
+        assert_eq!(
+            rectangle.fill,
+            Some(Color::Rgb {
+                red: 23,
+                green: 74,
+                blue: 115
+            })
+        );
+        assert_eq!(
+            rectangle.stroke.as_ref().unwrap().color,
+            Color::Cmyk {
+                cyan: 0.0,
+                magenta: 40.0,
+                yellow: 80.0,
+                black: 0.0
+            }
+        );
     }
 
     #[test]

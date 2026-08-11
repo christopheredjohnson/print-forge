@@ -12,15 +12,15 @@
     "notes_prompt": "IMPORTANT THINGS TO REMEMBER",
     "notes": "Verify this quick-reference card against the current approved POH/AFM before use.\n\nWeather / winds:\nFuel plan:\nRoute / alternates:\nMaintenance reminders:",
     "theme": {
-      "name": "Spruce Ledger",
-      "paper": "#FFFDF8",
-      "ink": "#18323E",
-      "primary": "#18323E",
-      "section": "#147D75",
-      "accent": "#E19A48",
-      "secondary": "#B8D7D1",
-      "muted": "#6A7C82",
-      "border": "#A9BBB8"
+      "name": "Cider Note",
+      "paper": "#FFF9F0",
+      "ink": "#3B2618",
+      "primary": "#5A321C",
+      "section": "#A95819",
+      "accent": "#E2A14F",
+      "secondary": "#E8C8A4",
+      "muted": "#806A57",
+      "border": "#C7AA8B"
     }
   }
 ]

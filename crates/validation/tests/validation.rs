@@ -305,6 +305,39 @@ fn rejects_invalid_print_colors_and_empty_metadata() {
 }
 
 #[test]
+fn accepts_color_template_variables() {
+    let template = template(
+        r##"{
+          "name": "Theme variables",
+          "document": {
+            "width": { "value": 100, "unit": "points" },
+            "height": { "value": 100, "unit": "points" }
+          },
+          "pages": [{
+            "elements": [{
+              "type": "rectangle",
+              "position": {
+                "x": { "value": 10, "unit": "points" },
+                "y": { "value": 10, "unit": "points" },
+                "width": { "value": 20, "unit": "points" },
+                "height": { "value": 20, "unit": "points" }
+              },
+              "fill": "{{theme_primary}}",
+              "stroke": {
+                "width": { "value": 1, "unit": "points" },
+                "color": "{{ theme_accent }}"
+              }
+            }]
+          }]
+        }"##,
+    );
+
+    let report = validate_template(&template);
+
+    assert!(report.is_valid(), "{:#?}", report.diagnostics());
+}
+
+#[test]
 fn rejects_invalid_flow_layout_contracts() {
     let template = template(
         r##"{

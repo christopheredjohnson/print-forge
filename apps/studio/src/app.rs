@@ -1585,6 +1585,8 @@ fn resolve_preview(
                 };
                 let value = if is_collection_variable(template, variable) {
                     serde_json::Value::Array(Vec::new())
+                } else if is_color_variable(template, variable) {
+                    serde_json::Value::String("#808080".to_owned())
                 } else {
                     serde_json::Value::String(format!("{{{{{variable}}}}}"))
                 };
@@ -1674,6 +1676,49 @@ fn element_uses_collection(element: &Element, variable: &str) -> bool {
             .iter()
             .any(|child| element_uses_collection(child, variable)),
         _ => false,
+    }
+}
+
+fn is_color_variable(template: &Template, variable: &str) -> bool {
+    template.pages.iter().any(|page| {
+        page.header
+            .iter()
+            .chain(&page.elements)
+            .chain(&page.footer)
+            .any(|element| element_uses_color_variable(element, variable))
+    })
+}
+
+fn element_uses_color_variable(element: &Element, variable: &str) -> bool {
+    let uses = |value: &str| first_template_variable(value) == Some(variable);
+    let stroke_uses = |stroke: &print_forge_template::Stroke| uses(&stroke.color);
+
+    match element {
+        Element::Text(text) => uses(&text.color),
+        Element::Rectangle(rectangle) => {
+            rectangle.fill.as_deref().is_some_and(uses)
+                || rectangle.stroke.as_ref().is_some_and(stroke_uses)
+        }
+        Element::Line(line) => uses(&line.color),
+        Element::QrCode(qr_code) => uses(&qr_code.color) || uses(&qr_code.background),
+        Element::Barcode(barcode) => uses(&barcode.color) || uses(&barcode.background),
+        Element::Group(group) => group
+            .children
+            .iter()
+            .any(|child| element_uses_color_variable(child, variable)),
+        Element::Stack(stack) => stack
+            .children
+            .iter()
+            .any(|child| element_uses_color_variable(child, variable)),
+        Element::Table(table) => {
+            uses(&table.color)
+                || table.border.as_ref().is_some_and(stroke_uses)
+                || table.header_background.as_deref().is_some_and(uses)
+                || table.row_background.as_deref().is_some_and(uses)
+                || table.alternate_row_background.as_deref().is_some_and(uses)
+        }
+        Element::Repeater(repeater) => element_uses_color_variable(&repeater.template, variable),
+        Element::Image(_) | Element::Svg(_) | Element::PageBreak => false,
     }
 }
 
@@ -3779,6 +3824,30 @@ mod tests {
             first_template_variable("/assets/{{profile.photo}}"),
             Some("profile.photo")
         );
+    }
+
+    #[test]
+    fn rendered_preview_uses_neutral_fallbacks_for_missing_theme_colors() {
+        let mut template = starter_template();
+        let Element::Text(text) = &mut template.pages[0].elements[0] else {
+            panic!("starter element should be text");
+        };
+        text.color = "{{theme.ink}}".to_owned();
+
+        let preview = resolve_preview(&template, "{}", PathBuf::from(".")).unwrap();
+        let DrawCommand::Text(text) = &preview.pages[0].commands[0].command else {
+            panic!("resolved preview command should be text");
+        };
+
+        assert_eq!(
+            text.color,
+            PrintColor::Rgb {
+                red: 128,
+                green: 128,
+                blue: 128
+            }
+        );
+        assert_eq!(preview.placeholder_variables, ["theme.ink"]);
     }
 
     #[test]
