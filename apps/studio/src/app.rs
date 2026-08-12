@@ -39,6 +39,7 @@ const CHARCOAL: Color32 = Color32::from_rgb(31, 36, 41);
 const PANEL: Color32 = Color32::from_rgb(38, 44, 50);
 const PANEL_DEEP: Color32 = Color32::from_rgb(26, 31, 36);
 const CREAM: Color32 = Color32::from_rgb(250, 247, 239);
+const HISTORY_LIMIT: usize = 100;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 enum Selection {
@@ -165,6 +166,100 @@ struct ResolvedPreview {
     placeholder_variables: Vec<String>,
 }
 
+#[derive(Clone)]
+struct EditSnapshot {
+    template: Template,
+    guides: Vec<Vec<EditorGuide>>,
+    current_page: usize,
+    selection: Selection,
+}
+
+impl EditSnapshot {
+    fn same_content(&self, other: &Self) -> bool {
+        self.template == other.template && self.guides == other.guides
+    }
+}
+
+#[derive(Default)]
+struct EditHistory {
+    undo: Vec<EditSnapshot>,
+    redo: Vec<EditSnapshot>,
+    observed: Option<EditSnapshot>,
+    transaction: Option<EditSnapshot>,
+}
+
+impl EditHistory {
+    fn reset(&mut self, snapshot: EditSnapshot) {
+        self.undo.clear();
+        self.redo.clear();
+        self.transaction = None;
+        self.observed = Some(snapshot);
+    }
+
+    fn observe(&mut self, snapshot: EditSnapshot, coalesce: bool) {
+        let Some(observed) = self.observed.take() else {
+            self.observed = Some(snapshot);
+            return;
+        };
+        let content_changed = !observed.same_content(&snapshot);
+        if content_changed && coalesce {
+            self.transaction.get_or_insert(observed);
+        } else if content_changed {
+            let before = self.transaction.take().unwrap_or(observed);
+            self.push_undo(before);
+            self.redo.clear();
+        } else if !coalesce
+            && let Some(before) = self.transaction.take()
+            && !before.same_content(&snapshot)
+        {
+            self.push_undo(before);
+            self.redo.clear();
+        }
+        self.observed = Some(snapshot);
+    }
+
+    fn finish_transaction(&mut self, current: &EditSnapshot) {
+        if let Some(before) = self.transaction.take()
+            && !before.same_content(current)
+        {
+            self.push_undo(before);
+            self.redo.clear();
+        }
+        self.observed = Some(current.clone());
+    }
+
+    fn undo(&mut self, current: EditSnapshot) -> Option<EditSnapshot> {
+        self.finish_transaction(&current);
+        let target = self.undo.pop()?;
+        self.redo.push(current);
+        self.observed = Some(target.clone());
+        Some(target)
+    }
+
+    fn redo(&mut self, current: EditSnapshot) -> Option<EditSnapshot> {
+        self.finish_transaction(&current);
+        let target = self.redo.pop()?;
+        self.push_undo(current);
+        self.observed = Some(target.clone());
+        Some(target)
+    }
+
+    fn push_undo(&mut self, snapshot: EditSnapshot) {
+        if self.undo.len() == HISTORY_LIMIT {
+            self.undo.remove(0);
+        }
+        self.undo.push(snapshot);
+    }
+
+    fn can_undo(&self) -> bool {
+        !self.undo.is_empty() || self.transaction.is_some()
+    }
+
+    fn can_redo(&self) -> bool {
+        !self.redo.is_empty()
+    }
+}
+
 impl Deref for ResolvedPreview {
     type Target = ResolvedDocument;
 
@@ -175,6 +270,7 @@ impl Deref for ResolvedPreview {
 
 pub struct StudioApp {
     template: Template,
+    saved_template: Template,
     current_path: Option<PathBuf>,
     current_page: usize,
     selection: Selection,
@@ -194,6 +290,7 @@ pub struct StudioApp {
     snap_enabled: bool,
     active_drag: Option<ElementDragState>,
     guide_draft: Option<GuideDraft>,
+    history: EditHistory,
 }
 
 impl StudioApp {
@@ -228,8 +325,10 @@ impl StudioApp {
                 },
             );
 
-        Self {
+        let saved_template = template.clone();
+        let mut app = Self {
             template,
+            saved_template,
             current_path,
             current_page,
             selection: Selection::Document,
@@ -252,7 +351,10 @@ impl StudioApp {
             snap_enabled,
             active_drag: None,
             guide_draft: None,
-        }
+            history: EditHistory::default(),
+        };
+        app.reset_history();
+        app
     }
 
     fn new_project(&mut self) {
@@ -260,6 +362,7 @@ impl StudioApp {
             return;
         }
         self.template = starter_template();
+        self.saved_template = self.template.clone();
         self.current_path = None;
         self.current_page = 0;
         self.preview_page = 0;
@@ -269,6 +372,7 @@ impl StudioApp {
         self.asset_cache.textures.clear();
         self.selection = Selection::Document;
         self.dirty = false;
+        self.reset_history();
         self.set_notice(NoticeKind::Success, "Created a new template");
     }
 
@@ -290,6 +394,7 @@ impl StudioApp {
             }) {
             Ok(template) => {
                 self.template = template;
+                self.saved_template = self.template.clone();
                 self.current_path = Some(path.clone());
                 self.current_page = 0;
                 self.preview_page = 0;
@@ -299,6 +404,7 @@ impl StudioApp {
                 self.asset_cache.textures.clear();
                 self.selection = Selection::Document;
                 self.dirty = false;
+                self.reset_history();
                 self.set_notice(
                     NoticeKind::Success,
                     format!("Opened {}", display_name(&path)),
@@ -332,6 +438,7 @@ impl StudioApp {
         {
             Ok(()) => {
                 self.current_path = Some(path.clone());
+                self.saved_template = self.template.clone();
                 self.dirty = false;
                 self.set_notice(
                     NoticeKind::Success,
@@ -468,6 +575,59 @@ impl StudioApp {
         };
     }
 
+    fn edit_snapshot(&self) -> EditSnapshot {
+        EditSnapshot {
+            template: self.template.clone(),
+            guides: self.guides.clone(),
+            current_page: self.current_page,
+            selection: self.selection,
+        }
+    }
+
+    fn restore_snapshot(&mut self, snapshot: EditSnapshot) {
+        self.template = snapshot.template;
+        self.guides = snapshot.guides;
+        self.current_page = snapshot
+            .current_page
+            .min(self.template.pages.len().saturating_sub(1));
+        self.selection = snapshot.selection;
+        self.preview_page = 0;
+        self.active_drag = None;
+        self.guide_draft = None;
+        self.asset_cache.textures.clear();
+        self.dirty = self.template != self.saved_template;
+    }
+
+    fn reset_history(&mut self) {
+        let snapshot = self.edit_snapshot();
+        self.history.reset(snapshot);
+    }
+
+    fn undo(&mut self) {
+        let current = self.edit_snapshot();
+        if let Some(snapshot) = self.history.undo(current) {
+            self.restore_snapshot(snapshot);
+            self.set_notice(NoticeKind::Success, "Undid last edit");
+        }
+    }
+
+    fn redo(&mut self) {
+        let current = self.edit_snapshot();
+        if let Some(snapshot) = self.history.redo(current) {
+            self.restore_snapshot(snapshot);
+            self.set_notice(NoticeKind::Success, "Redid last edit");
+        }
+    }
+
+    fn observe_history(&mut self, ctx: &egui::Context) {
+        let coalesce = self.active_drag.is_some()
+            || ctx.input(|input| input.pointer.any_down())
+            || ctx.wants_keyboard_input();
+        let snapshot = self.edit_snapshot();
+        self.history.observe(snapshot, coalesce);
+        self.dirty = self.template != self.saved_template;
+    }
+
     fn show_toolbar(&mut self, ctx: &egui::Context) {
         egui::TopBottomPanel::top("studio-toolbar")
             .exact_height(58.0)
@@ -498,6 +658,23 @@ impl StudioApp {
                         RichText::new(format!("{path}{}", if self.dirty { "  •" } else { "" }))
                             .color(Color32::from_gray(190)),
                     );
+                    ui.separator();
+                    let can_undo = self.history.can_undo();
+                    let can_redo = self.history.can_redo();
+                    if ui
+                        .add_enabled(can_undo, egui::Button::new("Undo"))
+                        .on_hover_text("Undo last edit (Cmd/Ctrl+Z)")
+                        .clicked()
+                    {
+                        self.undo();
+                    }
+                    if ui
+                        .add_enabled(can_redo, egui::Button::new("Redo"))
+                        .on_hover_text("Redo last edit (Cmd/Ctrl+Shift+Z)")
+                        .clicked()
+                    {
+                        self.redo();
+                    }
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if accent_button(ui, "Render PDF").clicked() {
                             self.render_pdf();
@@ -1463,9 +1640,13 @@ impl StudioApp {
     }
 
     fn handle_shortcuts(&mut self, ctx: &egui::Context) {
-        let (save, save_as, open, duplicate, delete, toggle_guides, toggle_snap) =
-            ctx.input(|input| {
+        let (undo, redo, save, save_as, open, duplicate, delete, toggle_guides, toggle_snap) = ctx
+            .input(|input| {
                 (
+                    input.modifiers.command && !input.modifiers.shift && input.key_pressed(Key::Z),
+                    input.modifiers.command
+                        && ((input.modifiers.shift && input.key_pressed(Key::Z))
+                            || input.key_pressed(Key::Y)),
                     input.modifiers.command && input.key_pressed(Key::S) && !input.modifiers.shift,
                     input.modifiers.command && input.modifiers.shift && input.key_pressed(Key::S),
                     input.modifiers.command && input.key_pressed(Key::O),
@@ -1479,7 +1660,11 @@ impl StudioApp {
                         && input.key_pressed(Key::Semicolon),
                 )
             });
-        if save {
+        if undo {
+            self.undo();
+        } else if redo {
+            self.redo();
+        } else if save {
             self.save_project(false);
         } else if save_as {
             self.save_project(true);
@@ -1543,6 +1728,7 @@ impl eframe::App for StudioApp {
         self.show_status(ctx, &report);
         self.show_json_window(ctx);
         self.show_preview_data_window(ctx);
+        self.observe_history(ctx);
     }
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
@@ -3673,11 +3859,11 @@ mod tests {
     use print_forge_template::{Color as PrintColor, Element, TextAlign};
 
     use super::{
-        EditorGuide, ElementDragKind, ElementDragState, GuideAxis, PersistedState,
-        PreviewErrorCopy, ScreenTransform, aligned_preview_text_origin, alignment_targets,
-        first_template_variable, guide_position_from_pointer, inverse_rotate_vector, parse_color,
-        preview_error_copy, print_color, push_editor_guide, resolve_preview, rgb_hex, safe_stem,
-        serialize_template,
+        EditHistory, EditSnapshot, EditorGuide, ElementDragKind, ElementDragState, GuideAxis,
+        PersistedState, PreviewErrorCopy, ScreenTransform, Selection, aligned_preview_text_origin,
+        alignment_targets, first_template_variable, guide_position_from_pointer,
+        inverse_rotate_vector, parse_color, preview_error_copy, print_color, push_editor_guide,
+        resolve_preview, rgb_hex, safe_stem, serialize_template,
     };
     use crate::model::{ElementKind, new_element, starter_template};
 
@@ -3687,6 +3873,54 @@ mod tests {
         let json = serialize_template(&template).unwrap();
         assert!(json.ends_with('\n'));
         assert_eq!(template, serde_json::from_str(&json).unwrap());
+    }
+
+    #[test]
+    fn edit_history_coalesces_interactions_and_supports_redo() {
+        let snapshot = |name: &str| {
+            let mut template = starter_template();
+            template.name = name.to_owned();
+            EditSnapshot {
+                template,
+                guides: vec![Vec::new()],
+                current_page: 0,
+                selection: Selection::Document,
+            }
+        };
+        let mut history = EditHistory::default();
+        history.reset(snapshot("Original"));
+        history.observe(snapshot("Dragging 1"), true);
+        history.observe(snapshot("Dragging 2"), true);
+        history.observe(snapshot("Dragging 2"), false);
+
+        let undone = history.undo(snapshot("Dragging 2")).unwrap();
+        assert_eq!(undone.template.name, "Original");
+        assert!(history.can_redo());
+
+        let redone = history.redo(undone).unwrap();
+        assert_eq!(redone.template.name, "Dragging 2");
+    }
+
+    #[test]
+    fn a_new_edit_clears_redo_history() {
+        let snapshot = |name: &str| {
+            let mut template = starter_template();
+            template.name = name.to_owned();
+            EditSnapshot {
+                template,
+                guides: vec![Vec::new()],
+                current_page: 0,
+                selection: Selection::Document,
+            }
+        };
+        let mut history = EditHistory::default();
+        history.reset(snapshot("Original"));
+        history.observe(snapshot("First edit"), false);
+        let original = history.undo(snapshot("First edit")).unwrap();
+        history.observe(snapshot("Replacement edit"), false);
+
+        assert_eq!(original.template.name, "Original");
+        assert!(!history.can_redo());
     }
 
     #[test]

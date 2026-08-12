@@ -34,11 +34,12 @@ The initial Studio supports native open/save dialogs, multipage projects,
 draggable, resizable, and rotatable page elements, controllable layer ordering,
 document and element inspectors with inline color pickers, variable-field
 definitions, live semantic validation, raw JSON editing for advanced elements,
-preview data, and direct PDF rendering through the Print Forge layout and PDF
-crates. Elements can be rotated with the canvas handle, an exact inspector
-value, or the 90-degree shortcuts. Layer controls move the selection backward,
-forward, fully behind, or fully in front. Non-printing rulers and page-specific
-guides support center lines, a quick 18pt margin set, exact point positions, and
+preview data, 100-step undo/redo history, and direct PDF rendering through the
+Print Forge layout and PDF crates. Elements can be rotated with the canvas
+handle, an exact inspector value, or the 90-degree shortcuts. Layer controls
+move the selection backward, forward, fully behind, or fully in front.
+Non-printing rulers and page-specific guides support center lines, a quick 18pt
+margin set, exact point positions, and
 creation by dragging from the top or left ruler. Existing guides can be dragged
 directly on the canvas. Smart snapping aligns moves, resizes, and line endpoints
 to page edges and centers, guides, and neighboring layer edges and centers;
@@ -54,6 +55,10 @@ placeholders and are reported in the canvas toolbar instead of preventing the
 preview from rendering. Screen font rasterization is still an approximation;
 the rendered PDF remains authoritative for final typography and print
 inspection.
+
+`Cmd/Ctrl+Z` undoes an edit and `Cmd/Ctrl+Shift+Z` redoes it. Canvas gestures
+and inspector typing sessions are coalesced into single history steps.
+
 Imported tables, groups, stacks, and repeaters remain editable through the JSON
 view while their dedicated visual inspectors are developed.
 
@@ -360,7 +365,7 @@ The roadmap below contains only unfinished work. Priorities favor a dependable
 ### P0 — Ship a usable 0.1 release
 
 - [ ] Make Print Forge Studio a supported no-code authoring path: add visual
-      inspectors for every MVP element, undo/redo, explicit alignment and
+      inspectors for every MVP element, explicit alignment and
       distribution commands, asset/font management, representative data-row
       selection, and an exact PDF-rasterized typography preview; then include
       the desktop app in release packaging.
