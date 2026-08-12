@@ -13,13 +13,6 @@
     { "name": "batch", "field_type": "text", "required": true },
     { "name": "recipients", "field_type": "collection", "required": true }
   ],
-  "fonts": [
-    {
-      "name": "Helvetica",
-      "regular": "assets/fonts/Helvetica.ttf",
-      "bold": "assets/fonts/Helvetica-Bold.ttf"
-    }
-  ],
   "pages": [
     {
       "header": [

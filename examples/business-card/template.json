@@ -17,12 +17,6 @@
     { "name": "last_name", "field_type": "text", "required": true },
     { "name": "title", "field_type": "text", "required": true }
   ],
-  "fonts": [
-    {
-      "name": "print-forge-sans",
-      "regular": "assets/fonts/Helvetica.ttf"
-    }
-  ],
   "pages": [
     {
       "elements": [
@@ -36,7 +30,7 @@
           },
           "value": "{{first_name}} {{last_name}}",
           "font_size": { "value": 16, "unit": "points" },
-          "font": "print-forge-sans",
+          "font": "Helvetica",
           "color": "cmyk(0%, 0%, 0%, 100%)"
         },
         {
@@ -49,7 +43,7 @@
           },
           "value": "{{title}}",
           "font_size": { "value": 9, "unit": "points" },
-          "font": "print-forge-sans",
+          "font": "Helvetica",
           "color": "cmyk(0%, 0%, 0%, 70%)"
         },
         {

@@ -13,13 +13,6 @@
     { "name": "product_url", "field_type": "text", "required": true },
     { "name": "sku", "field_type": "text", "required": true }
   ],
-  "fonts": [
-    {
-      "name": "Helvetica",
-      "regular": "assets/fonts/Helvetica.ttf",
-      "bold": "assets/fonts/Helvetica-Bold.ttf"
-    }
-  ],
   "pages": [
     {
       "elements": [

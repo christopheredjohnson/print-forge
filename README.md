@@ -44,7 +44,9 @@ my-print-project/
 files into it, and rewrites their template references as portable relative
 paths. URLs, data-driven paths, and missing placeholder paths remain unchanged.
 Existing standalone JSON templates still open and save normally; use `Save as`
-to migrate one into a project folder.
+to migrate one into a project folder. The PDF engine already bundles the
+Helvetica family, so projects only need `assets/fonts/` when they use additional
+font families.
 
 The initial Studio supports native open/save dialogs, multipage projects,
 draggable, resizable, and rotatable page elements, named layers with persisted

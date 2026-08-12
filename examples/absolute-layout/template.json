@@ -5,15 +5,6 @@
     "width": { "value": 612, "unit": "points" },
     "height": { "value": 792, "unit": "points" }
   },
-  "fonts": [
-    {
-      "name": "Fixture Sans",
-      "regular": "assets/fonts/Helvetica.ttf",
-      "bold": "assets/fonts/Helvetica-Bold.ttf",
-      "italic": "assets/fonts/Helvetica-Oblique.ttf",
-      "bold_italic": "assets/fonts/Helvetica-BoldOblique.ttf"
-    }
-  ],
   "pages": [
     {
       "elements": [
@@ -40,7 +31,7 @@
             "height": { "value": 42, "unit": "points" }
           },
           "value": "Essential absolute layout",
-          "font": "Fixture Sans",
+          "font": "Helvetica",
           "font_style": "bold",
           "font_size": { "value": 24, "unit": "points" },
           "line_height": { "value": 28, "unit": "points" },
@@ -67,7 +58,7 @@
             "height": { "value": 54, "unit": "points" }
           },
           "value": "Left aligned text wraps using measured glyph advances.",
-          "font": "Fixture Sans",
+          "font": "Helvetica",
           "font_size": { "value": 11, "unit": "points" },
           "line_height": { "value": 14, "unit": "points" },
           "align": "left",
@@ -83,7 +74,7 @@
             "height": { "value": 54, "unit": "points" }
           },
           "value": "Centered italic text wraps inside this fixed box.",
-          "font": "Fixture Sans",
+          "font": "Helvetica",
           "font_style": "italic",
           "font_size": { "value": 11, "unit": "points" },
           "line_height": { "value": 14, "unit": "points" },
@@ -100,7 +91,7 @@
             "height": { "value": 54, "unit": "points" }
           },
           "value": "Right aligned bold italic text wraps here.",
-          "font": "Fixture Sans",
+          "font": "Helvetica",
           "font_style": "bold_italic",
           "font_size": { "value": 11, "unit": "points" },
           "line_height": { "value": 14, "unit": "points" },
@@ -117,7 +108,7 @@
             "height": { "value": 54, "unit": "points" }
           },
           "value": "Justified lines distribute the remaining width between words while the final line remains naturally spaced. This fixture makes alignment failures easy to spot.",
-          "font": "Fixture Sans",
+          "font": "Helvetica",
           "font_size": { "value": 12, "unit": "points" },
           "line_height": { "value": 16, "unit": "points" },
           "align": "justify",
@@ -148,7 +139,7 @@
             "height": { "value": 30, "unit": "points" }
           },
           "value": "Shrink: {{shrink_text}}",
-          "font": "Fixture Sans",
+          "font": "Helvetica",
           "font_style": "bold",
           "font_size": { "value": 18, "unit": "points" },
           "min_font_size": { "value": 7, "unit": "points" },
@@ -178,7 +169,7 @@
             "height": { "value": 30, "unit": "points" }
           },
           "value": "Clip: this deliberately long text continues outside its box but must remain invisible beyond the red border.",
-          "font": "Fixture Sans",
+          "font": "Helvetica",
           "font_size": { "value": 14, "unit": "points" },
           "line_height": { "value": 17, "unit": "points" },
           "overflow": "clip",
@@ -226,7 +217,7 @@
             "height": { "value": 20, "unit": "points" }
           },
           "value": "PNG · contain",
-          "font": "Fixture Sans",
+          "font": "Helvetica",
           "font_style": "bold",
           "font_size": { "value": 10, "unit": "points" },
           "align": "center"
@@ -240,7 +231,7 @@
             "height": { "value": 20, "unit": "points" }
           },
           "value": "JPEG · cover + clip",
-          "font": "Fixture Sans",
+          "font": "Helvetica",
           "font_style": "bold",
           "font_size": { "value": 10, "unit": "points" },
           "align": "center"
@@ -254,7 +245,7 @@
             "height": { "value": 20, "unit": "points" }
           },
           "value": "PNG · stretch",
-          "font": "Fixture Sans",
+          "font": "Helvetica",
           "font_style": "bold",
           "font_size": { "value": 10, "unit": "points" },
           "align": "center"
@@ -278,7 +269,7 @@
             "height": { "value": 120, "unit": "points" }
           },
           "value": "Font variants embedded: regular · bold · italic · bold italic\nAssets resolve from the template directory, independent of the shell working directory.\nRectangles, solid/dashed/dotted strokes, measured text, and raster images share one coordinate system.",
-          "font": "Fixture Sans",
+          "font": "Helvetica",
           "font_size": { "value": 12, "unit": "points" },
           "line_height": { "value": 22, "unit": "points" },
           "align": "center",

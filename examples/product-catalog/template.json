@@ -13,13 +13,6 @@
     { "name": "company", "field_type": "text", "required": true },
     { "name": "catalog.products", "field_type": "collection", "required": true }
   ],
-  "fonts": [
-    {
-      "name": "Helvetica",
-      "regular": "assets/fonts/Helvetica.ttf",
-      "bold": "assets/fonts/Helvetica-Bold.ttf"
-    }
-  ],
   "pages": [
     {
       "header": [

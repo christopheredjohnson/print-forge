@@ -33,15 +33,6 @@
     { "name": "theme.muted", "field_type": "text", "required": true },
     { "name": "theme.border", "field_type": "text", "required": true }
   ],
-  "fonts": [
-    {
-      "name": "Helvetica",
-      "regular": "assets/fonts/Helvetica.ttf",
-      "bold": "assets/fonts/Helvetica-Bold.ttf",
-      "italic": "assets/fonts/Helvetica-Oblique.ttf",
-      "bold_italic": "assets/fonts/Helvetica-BoldOblique.ttf"
-    }
-  ],
   "pages": [
     {
       "elements": [
