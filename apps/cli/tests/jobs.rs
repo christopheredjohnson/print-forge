@@ -111,6 +111,31 @@ fn combined_mode_renders_every_dataset_row() {
 }
 
 #[test]
+fn project_folder_can_be_used_in_place_of_its_template_manifest() {
+    let directory = TestDir::new("project-folder");
+    let project = directory.path().join("customer-cards");
+    fs::create_dir_all(project.join("assets/images")).unwrap();
+    fs::create_dir_all(project.join("assets/fonts")).unwrap();
+    fs::write(project.join("template.json"), job_template()).unwrap();
+    let dataset = directory.write("dataset.json", r#"[{"name":"Ada"}]"#);
+    let pdf = directory.path().join("project.pdf");
+
+    let output = run(&[
+        "render",
+        project.to_str().unwrap(),
+        dataset.to_str().unwrap(),
+        pdf.to_str().unwrap(),
+    ]);
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(page_count(&pdf), 1);
+}
+
+#[test]
 fn dry_run_preflights_all_rows_without_writing_files() {
     let directory = TestDir::new("dry-run");
     let template = directory.write("template.json", job_template());

@@ -7,7 +7,7 @@ use std::{
 use anyhow::{Context, Result};
 use clap::{ArgAction, Parser, Subcommand, ValueEnum};
 use print_forge_dataset::Dataset;
-use print_forge_template::Template;
+use print_forge_template::{PROJECT_MANIFEST_FILE, Template};
 use print_forge_validation::{Diagnostic, ValidationReport, validate_job, validate_template};
 use serde::Serialize;
 
@@ -50,6 +50,7 @@ pub(crate) struct OutputOptions {
 enum Command {
     /// Parse and semantically validate a template and optional dataset.
     Validate {
+        /// Template JSON path or project folder containing template.json.
         template: PathBuf,
         /// Also validate template fields against every dataset row.
         #[arg(long)]
@@ -185,10 +186,19 @@ fn validate_inputs(path: &Path, dataset_path: Option<&Path>, output: OutputOptio
 }
 
 pub(crate) fn load_template(path: &Path) -> Result<Template> {
+    let path = resolve_template_path(path);
     let file =
-        File::open(path).with_context(|| format!("failed to open template {}", path.display()))?;
+        File::open(&path).with_context(|| format!("failed to open template {}", path.display()))?;
     serde_json::from_reader(file)
         .with_context(|| format!("failed to parse template {}", path.display()))
+}
+
+pub(crate) fn resolve_template_path(path: &Path) -> PathBuf {
+    if path.is_dir() {
+        path.join(PROJECT_MANIFEST_FILE)
+    } else {
+        path.to_owned()
+    }
 }
 
 fn inspect_data(path: &Path, output: OutputOptions) -> Result<()> {

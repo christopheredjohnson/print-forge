@@ -4,6 +4,8 @@ use std::{fmt, str::FromStr};
 
 use serde::{Deserialize, Serialize};
 
+pub const PROJECT_MANIFEST_FILE: &str = "template.json";
+
 const POINTS_PER_INCH: f32 = 72.0;
 const MILLIMETERS_PER_INCH: f32 = 25.4;
 

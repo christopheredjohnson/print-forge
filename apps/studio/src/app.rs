@@ -33,6 +33,7 @@ use crate::model::{
     reorder_element, resize_element, set_element_rotation, snap_point, snap_size, snap_translation,
     starter_template, translate_element, translate_line_endpoint,
 };
+use crate::project::{PROJECT_MANIFEST, save_project_folder};
 
 const APP_STATE_KEY: &str = "print-forge-studio-state";
 const ORANGE: Color32 = Color32::from_rgb(244, 91, 32);
@@ -449,35 +450,83 @@ impl StudioApp {
     }
 
     fn save_project(&mut self, save_as: bool) {
-        let path = if !save_as {
-            self.current_path.clone()
+        if !save_as
+            && let Some(path) = self.current_path.clone()
+            && !is_project_manifest(&path)
+        {
+            match serialize_template(&self.template)
+                .and_then(|json| fs::write(&path, json).map_err(|error| error.to_string()))
+            {
+                Ok(()) => {
+                    self.saved_template = self.template.clone();
+                    self.dirty = false;
+                    self.set_notice(
+                        NoticeKind::Success,
+                        format!("Saved legacy template {}", display_name(&path)),
+                    );
+                }
+                Err(error) => {
+                    self.set_notice(NoticeKind::Error, format!("Save failed: {error}"));
+                }
+            }
+            return;
+        }
+
+        let project_root = if !save_as {
+            self.current_path
+                .as_deref()
+                .and_then(Path::parent)
+                .map(Path::to_owned)
         } else {
             None
-        };
-        let path = path.or_else(|| {
+        }
+        .or_else(|| {
             FileDialog::new()
-                .add_filter("Print Forge template", &["json"])
-                .set_file_name(safe_template_name(&self.template.name))
-                .set_title("Save Print Forge template")
-                .save_file()
+                .set_title("Choose or create the Print Forge project folder")
+                .pick_folder()
         });
-        let Some(mut path) = path else {
+        let Some(project_root) = project_root else {
             return;
         };
-        if path.extension().is_none() {
-            path.set_extension("json");
-        }
-        match serialize_template(&self.template)
-            .and_then(|json| fs::write(&path, json).map_err(|error| error.to_string()))
+        let manifest = project_root.join(PROJECT_MANIFEST);
+        if manifest.exists()
+            && self.current_path.as_deref() != Some(manifest.as_path())
+            && !matches!(
+                MessageDialog::new()
+                    .set_level(MessageLevel::Warning)
+                    .set_title("Existing Print Forge project")
+                    .set_description(format!(
+                        "Replace the template in {}? Existing managed assets will be preserved.",
+                        project_root.display()
+                    ))
+                    .set_buttons(MessageButtons::YesNo)
+                    .show(),
+                MessageDialogResult::Yes
+            )
         {
-            Ok(()) => {
-                self.current_path = Some(path.clone());
+            return;
+        }
+        let source_base = self.asset_base();
+        match save_project_folder(&self.template, &source_base, &project_root) {
+            Ok(saved) => {
+                self.template = saved.template;
+                self.current_path = Some(saved.manifest);
                 self.saved_template = self.template.clone();
+                self.asset_cache.textures.clear();
                 self.dirty = false;
-                self.set_notice(
-                    NoticeKind::Success,
-                    format!("Saved {}", display_name(&path)),
+                self.reset_history();
+                let mut message = format!(
+                    "Saved project {} · {} local asset(s) copied",
+                    display_name(&project_root),
+                    saved.copied_assets
                 );
+                if !saved.missing_assets.is_empty() {
+                    message.push_str(&format!(
+                        " · {} missing reference(s) preserved",
+                        saved.missing_assets.len()
+                    ));
+                }
+                self.set_notice(NoticeKind::Success, message);
             }
             Err(error) => self.set_notice(NoticeKind::Error, format!("Save failed: {error}")),
         }
@@ -848,7 +897,7 @@ impl StudioApp {
                     let path = self
                         .current_path
                         .as_deref()
-                        .map(display_name)
+                        .map(project_display_name)
                         .unwrap_or_else(|| "Untitled template".to_owned());
                     ui.label(
                         RichText::new(format!("{path}{}", if self.dirty { "  •" } else { "" }))
@@ -912,6 +961,18 @@ impl StudioApp {
                         .clicked()
                     {
                         self.selection = Selection::Document;
+                    }
+                    if let Some(path) = self.current_path.as_deref() {
+                        let project_status = if is_project_manifest(path) {
+                            "Project assets: assets/images + assets/fonts"
+                        } else {
+                            "Legacy JSON · use Save as to create a project folder"
+                        };
+                        ui.label(
+                            RichText::new(project_status)
+                                .color(Color32::from_gray(145))
+                                .small(),
+                        );
                     }
                     ui.add_space(14.0);
 
@@ -4289,8 +4350,19 @@ fn serialize_template(template: &Template) -> Result<String, String> {
     Ok(json)
 }
 
-fn safe_template_name(name: &str) -> String {
-    format!("{}.json", safe_stem(name))
+fn is_project_manifest(path: &Path) -> bool {
+    path.file_name()
+        .is_some_and(|name| name == PROJECT_MANIFEST)
+}
+
+fn project_display_name(path: &Path) -> String {
+    if is_project_manifest(path) {
+        path.parent()
+            .map(display_name)
+            .unwrap_or_else(|| display_name(path))
+    } else {
+        display_name(path)
+    }
 }
 
 fn safe_stem(name: &str) -> String {

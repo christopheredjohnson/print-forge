@@ -18,10 +18,14 @@ use print_forge_validation::{validate_data_row, validate_dataset, validate_templ
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::{OutputOptions, load_template, print_diagnostics, require_acceptable, write_json};
+use crate::{
+    OutputOptions, load_template, print_diagnostics, require_acceptable, resolve_template_path,
+    write_json,
+};
 
 #[derive(Debug, Args)]
 pub(crate) struct RenderArgs {
+    /// Template JSON path or project folder containing template.json.
     pub(crate) template: PathBuf,
     pub(crate) dataset: PathBuf,
     /// PDF path in combined mode; output directory in separate mode.
@@ -226,7 +230,8 @@ struct PreparedRow {
 
 pub(crate) fn render(arguments: &RenderArgs, output_options: OutputOptions) -> Result<()> {
     let started = Instant::now();
-    let template = load_template(&arguments.template)?;
+    let template_path = resolve_template_path(&arguments.template);
+    let template = load_template(&template_path)?;
 
     let template_report = validate_template(&template);
     print_diagnostics(&template_report, output_options);
@@ -259,8 +264,7 @@ pub(crate) fn render(arguments: &RenderArgs, output_options: OutputOptions) -> R
         template_report.warning_count(),
         arguments.dry_run,
     );
-    let asset_base = arguments
-        .template
+    let asset_base = template_path
         .parent()
         .unwrap_or_else(|| Path::new("."))
         .to_owned();
@@ -376,8 +380,10 @@ pub(crate) fn render(arguments: &RenderArgs, output_options: OutputOptions) -> R
     })
     .map_err(|error| anyhow!(error))?;
 
-    if arguments.output_mode == OutputMode::Combined && !stopped && !prepared.is_empty() {
-        if let Err(error) = write_combined_output(
+    if arguments.output_mode == OutputMode::Combined
+        && !stopped
+        && !prepared.is_empty()
+        && let Err(error) = write_combined_output(
             &template,
             &prepared,
             &arguments.output,
@@ -385,13 +391,13 @@ pub(crate) fn render(arguments: &RenderArgs, output_options: OutputOptions) -> R
             &mut summary,
             arguments.dry_run,
             output_options,
-        ) {
-            if !output_options.json {
-                eprintln!("combined output failed: {error:#}");
-            }
-            for row in &prepared {
-                summary.failure(row.row_index, row.warnings, &error);
-            }
+        )
+    {
+        if !output_options.json {
+            eprintln!("combined output failed: {error:#}");
+        }
+        for row in &prepared {
+            summary.failure(row.row_index, row.warnings, &error);
         }
     }
 

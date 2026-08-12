@@ -30,6 +30,22 @@ the same versioned JSON used by the CLI. Launch it during development with:
 cargo run -p print-forge-studio
 ```
 
+New Studio work is saved as a self-contained project folder:
+
+```text
+my-print-project/
+├── template.json
+└── assets/
+    ├── images/   # raster images and SVG artwork
+    └── fonts/    # locally managed font files
+```
+
+`Save as` creates this structure, copies resolvable local image, SVG, and font
+files into it, and rewrites their template references as portable relative
+paths. URLs, data-driven paths, and missing placeholder paths remain unchanged.
+Existing standalone JSON templates still open and save normally; use `Save as`
+to migrate one into a project folder.
+
 The initial Studio supports native open/save dialogs, multipage projects,
 draggable, resizable, and rotatable page elements, named layers with persisted
 visibility and editing locks, drag-to-reorder paint order,
@@ -93,7 +109,9 @@ Every command supports `--help`; the root command also supports `--version`.
 | `render` | `render <TEMPLATE> <DATASET> <OUTPUT> [OPTIONS]` | Render one combined PDF or one PDF per selected dataset row. |
 
 For `render`, `<OUTPUT>` is a PDF path in combined mode and a directory in
-separate mode.
+separate mode. `<TEMPLATE>` may be either a standalone JSON file, a project's
+`template.json`, or the project folder itself. Relative asset paths resolve from
+the directory containing `template.json`.
 
 ### Render options
 
