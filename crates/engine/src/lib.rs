@@ -265,6 +265,9 @@ fn layout_template_page(
     }];
 
     for (element_index, element) in page.elements.iter().enumerate() {
+        if !element.is_visible() {
+            continue;
+        }
         let source_path = format!("pages[{page_index}].elements[{element_index}]");
         match element {
             Element::PageBreak => pages.push(ResolvedPage {
@@ -364,6 +367,9 @@ fn layout_repeating_elements(
     let mut commands = Vec::new();
     for (section, elements) in [("header", &page.header), ("footer", &page.footer)] {
         for (element_index, element) in elements.iter().enumerate() {
+            if !element.is_visible() {
+                continue;
+            }
             let source_path = format!("pages[{page_index}].{section}[{element_index}]");
             match element {
                 Element::PageBreak => {
@@ -462,6 +468,9 @@ fn layout_group(
 
     let mut commands = Vec::new();
     for (index, child) in group.children.iter().enumerate() {
+        if !child.is_visible() {
+            continue;
+        }
         let child_path = format!("{source_path}.children[{index}]");
         let child_commands = match child {
             Element::Group(nested) => {
@@ -553,6 +562,9 @@ fn layout_repeater(
     page_width: f32,
     page_height: f32,
 ) -> Result<Vec<Vec<ResolvedCommand>>, ElementLayoutError> {
+    if !repeater.template.is_visible() {
+        return Ok(vec![Vec::new()]);
+    }
     let value = lookup_value(data, &repeater.source)
         .ok_or_else(|| ElementLayoutError::MissingVariable(repeater.source.clone()))?;
     let items = value.as_array().ok_or_else(|| {
@@ -638,6 +650,9 @@ fn layout_repeated_element(
     data: &DataRow,
     options: &LayoutOptions,
 ) -> Result<Vec<ResolvedCommand>, ElementLayoutError> {
+    if !element.is_visible() {
+        return Ok(Vec::new());
+    }
     match element {
         Element::Group(group) => {
             layout_group(group, Some(bounds), source_path, template, data, options)
@@ -784,6 +799,9 @@ fn paginate_vertical_stack(
     let mut items_on_page = 0_usize;
 
     for (index, child) in stack.children.iter().enumerate() {
+        if !child.is_visible() {
+            continue;
+        }
         let child_path = format!("{source_path}.children[{index}]");
         if matches!(child, Element::PageBreak) {
             pages.push(Vec::new());
@@ -860,7 +878,11 @@ fn layout_stack_in_bounds(
                 max_height: content.height,
             };
             let mut cursor_top = content.y + content.height;
+            let mut visible_index = 0_usize;
             for (index, child) in stack.children.iter().enumerate() {
+                if !child.is_visible() {
+                    continue;
+                }
                 let child_path = format!("{source_path}.children[{index}]");
                 if matches!(child, Element::PageBreak) {
                     return Err(ElementLayoutError::InvalidLayout(
@@ -876,7 +898,7 @@ fn layout_stack_in_bounds(
                     options,
                 )?;
                 ensure_measured_size_fits(size, constraints, &child_path)?;
-                if index > 0 {
+                if visible_index > 0 {
                     cursor_top -= gap;
                 }
                 if cursor_top - size.height < content.y - 0.01 {
@@ -899,18 +921,23 @@ fn layout_stack_in_bounds(
                     options,
                 )?);
                 cursor_top -= size.height;
+                visible_index += 1;
             }
         }
         StackDirection::Horizontal => {
             let mut cursor_x = content.x;
+            let mut visible_index = 0_usize;
             for (index, child) in stack.children.iter().enumerate() {
+                if !child.is_visible() {
+                    continue;
+                }
                 let child_path = format!("{source_path}.children[{index}]");
                 if matches!(child, Element::PageBreak) {
                     return Err(ElementLayoutError::InvalidLayout(
                         "page breaks are not valid in horizontal stacks".to_owned(),
                     ));
                 }
-                if index > 0 {
+                if visible_index > 0 {
                     cursor_x += gap;
                 }
                 let constraints = MeasureConstraints {
@@ -941,6 +968,7 @@ fn layout_stack_in_bounds(
                     options,
                 )?);
                 cursor_x += size.width;
+                visible_index += 1;
             }
         }
     }
@@ -1620,6 +1648,9 @@ fn measure_stack(
     let mut count = 0_usize;
 
     for child in &stack.children {
+        if !child.is_visible() {
+            continue;
+        }
         if matches!(child, Element::PageBreak) {
             return Err(ElementLayoutError::InvalidLayout(
                 "nested stacks cannot contain page breaks".to_owned(),
@@ -2603,6 +2634,25 @@ mod tests {
         assert_eq!(text.lines[0].value, "Ada — Engineer");
         assert_eq!(text.bounds.x, 72.0);
         assert_eq!(document.pages[0].commands[0].rotation, 30.0);
+    }
+
+    #[test]
+    fn hidden_layers_do_not_render_while_locked_layers_still_do() {
+        let mut template: Template = serde_json::from_str(TEMPLATE).unwrap();
+        template.pages[0].elements[0].set_visible(false);
+        let data: DataRow = serde_json::from_value(json!({
+            "person": { "name": "Ada" },
+            "title": "Engineer"
+        }))
+        .unwrap();
+
+        let hidden = BasicLayoutEngine.layout(&template, &data).unwrap();
+        assert!(hidden.pages[0].commands.is_empty());
+
+        template.pages[0].elements[0].set_visible(true);
+        template.pages[0].elements[0].set_locked(true);
+        let locked = BasicLayoutEngine.layout(&template, &data).unwrap();
+        assert_eq!(locked.pages[0].commands.len(), 1);
     }
 
     #[test]

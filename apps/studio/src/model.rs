@@ -93,6 +93,9 @@ pub fn starter_template() -> Template {
             header: Vec::new(),
             footer: Vec::new(),
             elements: vec![Element::Text(TextElement {
+                name: None,
+                visible: true,
+                locked: false,
                 position: Some(bounds(54.0, 702.0, 504.0, 42.0)),
                 value: "Start forging your template".to_owned(),
                 font_size: Length::points(24.0),
@@ -114,6 +117,9 @@ pub fn new_element(kind: ElementKind, offset: f32) -> Element {
     let y = 630.0 - offset;
     match kind {
         ElementKind::Text => Element::Text(TextElement {
+            name: None,
+            visible: true,
+            locked: false,
             position: Some(bounds(x, y, 240.0, 36.0)),
             value: "New text".to_owned(),
             font_size: Length::points(18.0),
@@ -127,18 +133,27 @@ pub fn new_element(kind: ElementKind, offset: f32) -> Element {
             rotation: 0.0,
         }),
         ElementKind::Rectangle => Element::Rectangle(RectangleElement {
+            name: None,
+            visible: true,
+            locked: false,
             position: Some(bounds(x, y, 180.0, 90.0)),
             fill: Some("#F15A24".to_owned()),
             stroke: None,
             rotation: 0.0,
         }),
         ElementKind::Image => Element::Image(ImageElement {
+            name: None,
+            visible: true,
+            locked: false,
             position: Some(bounds(x, y, 180.0, 120.0)),
             source: "assets/images/example.png".to_owned(),
             fit: ImageFit::Contain,
             rotation: 0.0,
         }),
         ElementKind::Line => Element::Line(LineElement {
+            name: None,
+            visible: true,
+            locked: false,
             x1: Length::points(x),
             y1: Length::points(y),
             x2: Length::points(x + 220.0),
@@ -148,12 +163,18 @@ pub fn new_element(kind: ElementKind, offset: f32) -> Element {
             dash: DashStyle::Solid,
         }),
         ElementKind::Svg => Element::Svg(SvgElement {
+            name: None,
+            visible: true,
+            locked: false,
             position: Some(bounds(x, y, 144.0, 144.0)),
             source: "assets/vectors/example.svg".to_owned(),
             fit: ImageFit::Contain,
             rotation: 0.0,
         }),
         ElementKind::QrCode => Element::QrCode(QrCodeElement {
+            name: None,
+            visible: true,
+            locked: false,
             position: Some(bounds(x, y, 108.0, 108.0)),
             value: "https://example.com".to_owned(),
             error_correction: QrErrorCorrection::Medium,
@@ -163,6 +184,9 @@ pub fn new_element(kind: ElementKind, offset: f32) -> Element {
             rotation: 0.0,
         }),
         ElementKind::Barcode => Element::Barcode(BarcodeElement {
+            name: None,
+            visible: true,
+            locked: false,
             position: Some(bounds(x, y, 252.0, 72.0)),
             value: "PRINT-FORGE-001".to_owned(),
             format: BarcodeFormat::Code128,
@@ -191,6 +215,9 @@ pub const fn blank_page() -> Page {
 }
 
 pub fn element_label(element: &Element, index: usize) -> String {
+    if let Some(name) = element.layer_name().filter(|name| !name.trim().is_empty()) {
+        return name.to_owned();
+    }
     let kind = match element {
         Element::Text(text) => {
             let preview = text.value.lines().next().unwrap_or_default();
@@ -362,6 +389,15 @@ pub fn reorder_element(elements: &mut Vec<Element>, index: usize, movement: Laye
     let element = elements.remove(index);
     elements.insert(target, element);
     target
+}
+
+pub fn move_element(elements: &mut Vec<Element>, from: usize, to: usize) -> bool {
+    if from >= elements.len() || to >= elements.len() || from == to {
+        return false;
+    }
+    let element = elements.remove(from);
+    elements.insert(to, element);
+    true
 }
 
 pub fn align_elements(elements: &mut [Element], indices: &[usize], mode: AlignMode) -> bool {
@@ -590,8 +626,9 @@ mod tests {
     use super::{
         AlignMode, DistributionAxis, ElementKind, LayerMove, LineEndpoint, align_elements,
         bounds_points, distribute_elements, element_alignment_bounds, element_bounds,
-        element_rotation, new_element, reorder_element, set_element_rotation, snap_point,
-        snap_size, snap_translation, starter_template, translate_element, translate_line_endpoint,
+        element_rotation, move_element, new_element, reorder_element, set_element_rotation,
+        snap_point, snap_size, snap_translation, starter_template, translate_element,
+        translate_line_endpoint,
     };
 
     #[test]
@@ -652,6 +689,19 @@ mod tests {
         let selected = reorder_element(&mut elements, selected, LayerMove::Backward);
         assert_eq!(selected, 1);
         assert!(matches!(elements[1], Element::Text(_)));
+    }
+
+    #[test]
+    fn layers_can_drag_to_an_exact_paint_position() {
+        let mut elements = vec![
+            new_element(ElementKind::Text, 0.0),
+            new_element(ElementKind::Rectangle, 0.0),
+            new_element(ElementKind::Svg, 0.0),
+        ];
+
+        assert!(move_element(&mut elements, 0, 2));
+        assert!(matches!(elements[2], Element::Text(_)));
+        assert!(!move_element(&mut elements, 2, 2));
     }
 
     #[test]

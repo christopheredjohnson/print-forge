@@ -31,13 +31,16 @@ cargo run -p print-forge-studio
 ```
 
 The initial Studio supports native open/save dialogs, multipage projects,
-draggable, resizable, and rotatable page elements, controllable layer ordering,
+draggable, resizable, and rotatable page elements, named layers with persisted
+visibility and editing locks, drag-to-reorder paint order,
 document and element inspectors with inline color pickers, variable-field
 definitions, live semantic validation, raw JSON editing for advanced elements,
 preview data, 100-step undo/redo history, and direct PDF rendering through the
 Print Forge layout and PDF crates. Elements can be rotated with the canvas
-handle, an exact inspector value, or the 90-degree shortcuts. Layer controls
-move the selection backward, forward, fully behind, or fully in front.
+handle, an exact inspector value, or the 90-degree shortcuts. The Layers panel
+can hide, lock, rename, drag, or move the selection backward, forward, fully
+behind, or fully in front. Hidden layers are omitted from both Studio previews
+and exported PDFs; locked layers remain selectable but resist editing commands.
 Non-printing rulers and page-specific guides support center lines, a quick 18pt
 margin set, exact point positions, and
 creation by dragging from the top or left ruler. Existing guides can be dragged
@@ -192,8 +195,11 @@ the template.
 Page, header, footer, group, stack, and repeater element arrays paint in their
 declared order: later visual elements appear in front of earlier ones. Studio's
 layer list shows the frontmost element at the top and changes this canonical
-array order when an element moves backward or forward, so Studio, library, and
-CLI output remain consistent.
+array order when an element is dragged or moved backward or forward, so Studio,
+library, and CLI output remain consistent. Every non-page-break element also
+accepts optional `name`, `visible`, and `locked` layer metadata. `visible`
+defaults to `true` and controls engine/PDF output; `locked` defaults to `false`
+and is an editor hint that Studio enforces without changing rendered output.
 
 Text, image, rectangle, SVG, QR code, and barcode elements accept an optional
 `rotation` number in clockwise degrees. Rotation uses the center of the

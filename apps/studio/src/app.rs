@@ -29,8 +29,8 @@ use serde::{Deserialize, Serialize};
 use crate::model::{
     AlignMode, DistributionAxis, ElementKind, LayerMove, LineEndpoint, SnapResult, align_elements,
     blank_page, bounds_points, distribute_elements, element_alignment_bounds, element_bounds,
-    element_bounds_mut, element_label, element_rotation, new_element, new_field, reorder_element,
-    resize_element, set_element_rotation, snap_point, snap_size, snap_translation,
+    element_bounds_mut, element_label, element_rotation, move_element, new_element, new_field,
+    reorder_element, resize_element, set_element_rotation, snap_point, snap_size, snap_translation,
     starter_template, translate_element, translate_line_endpoint,
 };
 
@@ -52,6 +52,30 @@ enum Selection {
         indices: BTreeSet<usize>,
         primary: usize,
     },
+}
+
+fn remap_selection_after_layer_move(selection: &Selection, from: usize, to: usize) -> Selection {
+    let remap = |index: usize| {
+        if index == from {
+            to
+        } else if from < to && index > from && index <= to {
+            index - 1
+        } else if to < from && index >= to && index < from {
+            index + 1
+        } else {
+            index
+        }
+    };
+    match selection {
+        Selection::Element(index) => Selection::Element(remap(*index)),
+        Selection::Elements { indices, primary } => Selection::Elements {
+            indices: indices.iter().map(|index| remap(*index)).collect(),
+            primary: remap(*primary),
+        },
+        Selection::Document => Selection::Document,
+        Selection::Page => Selection::Page,
+        Selection::Field(index) => Selection::Field(*index),
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -295,6 +319,7 @@ pub struct StudioApp {
     show_guides: bool,
     snap_enabled: bool,
     active_drag: Option<ElementDragState>,
+    dragged_layer: Option<usize>,
     guide_draft: Option<GuideDraft>,
     history: EditHistory,
 }
@@ -356,6 +381,7 @@ impl StudioApp {
             show_guides,
             snap_enabled,
             active_drag: None,
+            dragged_layer: None,
             guide_draft: None,
             history: EditHistory::default(),
         };
@@ -374,6 +400,7 @@ impl StudioApp {
         self.preview_page = 0;
         self.guides = vec![Vec::new()];
         self.active_drag = None;
+        self.dragged_layer = None;
         self.guide_draft = None;
         self.asset_cache.textures.clear();
         self.selection = Selection::Document;
@@ -406,6 +433,7 @@ impl StudioApp {
                 self.preview_page = 0;
                 self.guides = vec![Vec::new(); self.template.pages.len()];
                 self.active_drag = None;
+                self.dragged_layer = None;
                 self.guide_draft = None;
                 self.asset_cache.textures.clear();
                 self.selection = Selection::Document;
@@ -549,7 +577,7 @@ impl StudioApp {
             drag.page != self.current_page || drag.index != index || drag.kind != kind
         });
         if should_reset {
-            let mut indices = self.selected_element_indices();
+            let mut indices = self.editable_selected_element_indices();
             if !indices.contains(&index) {
                 indices = vec![index];
             }
@@ -605,6 +633,18 @@ impl StudioApp {
         }
     }
 
+    fn editable_selected_element_indices(&self) -> Vec<usize> {
+        self.selected_element_indices()
+            .into_iter()
+            .filter(|index| {
+                self.template.pages[self.current_page]
+                    .elements
+                    .get(*index)
+                    .is_some_and(|element| !element.is_locked())
+            })
+            .collect()
+    }
+
     fn is_element_selected(&self, index: usize) -> bool {
         match &self.selection {
             Selection::Element(selected) => *selected == index,
@@ -645,7 +685,7 @@ impl StudioApp {
     }
 
     fn align_selection(&mut self, mode: AlignMode) {
-        let indices = self.selected_element_indices();
+        let indices = self.editable_selected_element_indices();
         if align_elements(
             &mut self.template.pages[self.current_page].elements,
             &indices,
@@ -656,7 +696,7 @@ impl StudioApp {
     }
 
     fn distribute_selection(&mut self, axis: DistributionAxis) {
-        let indices = self.selected_element_indices();
+        let indices = self.editable_selected_element_indices();
         if distribute_elements(
             &mut self.template.pages[self.current_page].elements,
             &indices,
@@ -667,8 +707,9 @@ impl StudioApp {
     }
 
     fn duplicate_selection(&mut self) {
-        let indices = self.selected_element_indices();
+        let indices = self.editable_selected_element_indices();
         if indices.is_empty() {
+            self.set_notice(NoticeKind::Info, "Unlock a layer before duplicating it");
             return;
         }
         let duplicates = indices
@@ -698,8 +739,9 @@ impl StudioApp {
     }
 
     fn delete_selection(&mut self) {
-        let mut indices = self.selected_element_indices();
+        let mut indices = self.editable_selected_element_indices();
         if indices.is_empty() {
+            self.set_notice(NoticeKind::Info, "Unlock a layer before deleting it");
             return;
         }
         indices.sort_unstable_by(|left, right| right.cmp(left));
@@ -711,6 +753,19 @@ impl StudioApp {
             }
         }
         self.selection = Selection::Page;
+        self.active_drag = None;
+        self.dirty = true;
+    }
+
+    fn move_layer(&mut self, from: usize, to: usize) {
+        if !move_element(
+            &mut self.template.pages[self.current_page].elements,
+            from,
+            to,
+        ) {
+            return;
+        }
+        self.selection = remap_selection_after_layer_move(&self.selection, from, to);
         self.active_drag = None;
         self.dirty = true;
     }
@@ -733,6 +788,7 @@ impl StudioApp {
         self.selection = snapshot.selection;
         self.preview_page = 0;
         self.active_drag = None;
+        self.dragged_layer = None;
         self.guide_draft = None;
         self.asset_cache.textures.clear();
         self.dirty = self.template != self.saved_template;
@@ -914,24 +970,117 @@ impl StudioApp {
 
                     ui.add_space(16.0);
                     section_label(ui, "LAYERS");
-                    let labels: Vec<String> = self.template.pages[self.current_page]
+                    let layers = self.template.pages[self.current_page]
                         .elements
                         .iter()
                         .enumerate()
-                        .map(|(index, element)| element_label(element, index))
-                        .collect();
-                    for (index, label) in labels.iter().enumerate().rev() {
-                        if selectable_row(ui, self.is_element_selected(index), label).clicked() {
+                        .map(|(index, element)| {
+                            (
+                                index,
+                                element_label(element, index),
+                                element.is_visible(),
+                                element.is_locked(),
+                            )
+                        })
+                        .collect::<Vec<_>>();
+                    let mut drop_target = None;
+                    for (index, label, visible, locked) in layers.into_iter().rev() {
+                        let selected = self.is_element_selected(index);
+                        let row = ui.horizontal(|ui| {
+                            let visibility = ui
+                                .add_sized(
+                                    [30.0, 22.0],
+                                    egui::Button::new(if visible { "VIS" } else { "HID" }),
+                                )
+                                .on_hover_text(if visible {
+                                    "Hide this layer"
+                                } else {
+                                    "Show this layer"
+                                });
+                            let lock = ui
+                                .add_sized(
+                                    [34.0, 22.0],
+                                    egui::Button::new(if locked { "LOCK" } else { "OPEN" }),
+                                )
+                                .on_hover_text(if locked {
+                                    "Unlock this layer"
+                                } else {
+                                    "Lock this layer"
+                                });
+                            let drag = ui
+                                .add(egui::Label::new("::").sense(if locked {
+                                    Sense::hover()
+                                } else {
+                                    Sense::drag()
+                                }))
+                                .on_hover_text(if locked {
+                                    "Unlock this layer to change paint order"
+                                } else {
+                                    "Drag to change paint order"
+                                });
+                            let text = RichText::new(label).color(if visible {
+                                Color32::from_gray(225)
+                            } else {
+                                Color32::from_gray(115)
+                            });
+                            let select = ui.selectable_label(selected, text);
+                            (visibility, lock, drag, select)
+                        });
+                        let (visibility, lock, drag, select) = row.inner;
+                        if visibility.clicked()
+                            && let Some(element) = self.template.pages[self.current_page]
+                                .elements
+                                .get_mut(index)
+                        {
+                            element.set_visible(!visible);
+                            self.dirty = true;
+                        }
+                        if lock.clicked()
+                            && let Some(element) = self.template.pages[self.current_page]
+                                .elements
+                                .get_mut(index)
+                        {
+                            element.set_locked(!locked);
+                            self.active_drag = None;
+                            self.dirty = true;
+                        }
+                        if select.clicked() {
                             let additive = ui.input(|input| input.modifiers.shift);
                             self.select_element(index, additive);
+                        }
+                        if drag.drag_started() {
+                            self.dragged_layer = Some(index);
+                        }
+                        if self.dragged_layer.is_some() && row.response.hovered() {
+                            drop_target = Some(index);
+                            ui.painter().rect_stroke(
+                                row.response.rect.expand(2.0),
+                                CornerRadius::same(2),
+                                Stroke::new(1.0_f32, ORANGE),
+                                StrokeKind::Outside,
+                            );
+                        }
+                    }
+                    if ui.input(|input| input.pointer.any_released()) {
+                        if let (Some(from), Some(to)) = (self.dragged_layer.take(), drop_target) {
+                            self.move_layer(from, to);
+                        } else {
+                            self.dragged_layer = None;
                         }
                     }
                     if let Selection::Element(index) = self.selection.clone() {
                         let layer_count = self.template.pages[self.current_page].elements.len();
+                        let selected_locked = self.template.pages[self.current_page]
+                            .elements
+                            .get(index)
+                            .is_some_and(Element::is_locked);
                         ui.add_space(6.0);
                         ui.horizontal(|ui| {
                             if ui
-                                .add_enabled(index > 0, egui::Button::new("Back"))
+                                .add_enabled(
+                                    index > 0 && !selected_locked,
+                                    egui::Button::new("Back"),
+                                )
                                 .on_hover_text("Send behind every other layer")
                                 .clicked()
                             {
@@ -944,7 +1093,10 @@ impl StudioApp {
                                 self.dirty = true;
                             }
                             if ui
-                                .add_enabled(index > 0, egui::Button::new("Lower"))
+                                .add_enabled(
+                                    index > 0 && !selected_locked,
+                                    egui::Button::new("Lower"),
+                                )
                                 .on_hover_text("Move backward one layer")
                                 .clicked()
                             {
@@ -957,7 +1109,10 @@ impl StudioApp {
                                 self.dirty = true;
                             }
                             if ui
-                                .add_enabled(index + 1 < layer_count, egui::Button::new("Raise"))
+                                .add_enabled(
+                                    index + 1 < layer_count && !selected_locked,
+                                    egui::Button::new("Raise"),
+                                )
                                 .on_hover_text("Move forward one layer")
                                 .clicked()
                             {
@@ -970,7 +1125,10 @@ impl StudioApp {
                                 self.dirty = true;
                             }
                             if ui
-                                .add_enabled(index + 1 < layer_count, egui::Button::new("Front"))
+                                .add_enabled(
+                                    index + 1 < layer_count && !selected_locked,
+                                    egui::Button::new("Front"),
+                                )
                                 .on_hover_text("Bring in front of every other layer")
                                 .clicked()
                             {
@@ -1052,7 +1210,19 @@ impl StudioApp {
                 .color(Color32::from_gray(155)),
         );
         ui.add_space(14.0);
-        self.alignment_controls(ui, indices.len());
+        let editable_count = self.editable_selected_element_indices().len();
+        if editable_count != indices.len() {
+            ui.label(
+                RichText::new(format!(
+                    "{} locked layer(s) will stay unchanged.",
+                    indices.len() - editable_count
+                ))
+                .color(Color32::from_gray(155))
+                .small(),
+            );
+            ui.add_space(8.0);
+        }
+        self.alignment_controls(ui, editable_count);
         ui.add_space(16.0);
         ui.horizontal(|ui| {
             if ui.button("Duplicate selected").clicked() {
@@ -1290,24 +1460,36 @@ impl StudioApp {
             index,
         );
         ui.heading(label);
-        let changed = element_properties(
-            ui,
-            &mut self.template.pages[self.current_page].elements[index],
-        );
+        let element = &mut self.template.pages[self.current_page].elements[index];
+        let mut changed = layer_properties(ui, element);
+        let locked = element.is_locked();
+        if locked {
+            ui.label(
+                RichText::new("Unlock this layer to edit its content or geometry.")
+                    .color(Color32::from_gray(155))
+                    .small(),
+            );
+            ui.add_space(12.0);
+        }
+        changed |= ui
+            .add_enabled_ui(!locked, |ui| element_properties(ui, element))
+            .inner;
         self.dirty |= changed;
         ui.add_space(16.0);
-        ui.horizontal(|ui| {
-            if ui.button("Duplicate").clicked() {
-                let duplicate = self.template.pages[self.current_page].elements[index].clone();
-                self.template.pages[self.current_page]
-                    .elements
-                    .insert(index + 1, duplicate);
-                self.selection = Selection::Element(index + 1);
-                self.dirty = true;
-            }
-            if danger_button(ui, "Delete").clicked() {
-                self.delete_selection();
-            }
+        ui.add_enabled_ui(!locked, |ui| {
+            ui.horizontal(|ui| {
+                if ui.button("Duplicate").clicked() {
+                    let duplicate = self.template.pages[self.current_page].elements[index].clone();
+                    self.template.pages[self.current_page]
+                        .elements
+                        .insert(index + 1, duplicate);
+                    self.selection = Selection::Element(index + 1);
+                    self.dirty = true;
+                }
+                if danger_button(ui, "Delete").clicked() {
+                    self.delete_selection();
+                }
+            });
         });
     }
 
@@ -1515,6 +1697,9 @@ impl StudioApp {
                     let snap_threshold = 7.0 / scale;
                     let mut snap_feedback = SnapFeedback::default();
                     for (index, element) in elements.iter().enumerate() {
+                        if !element.is_visible() {
+                            continue;
+                        }
                         let selected = self.is_element_selected(index);
                         let interaction = paint_element(
                             ui,
@@ -1526,6 +1711,7 @@ impl StudioApp {
                                 index,
                                 selected,
                                 primary: self.is_primary_element(index),
+                                locked: element.is_locked(),
                                 paint_content: !resolved,
                             },
                         );
@@ -1941,7 +2127,7 @@ impl StudioApp {
                 self.active_drag = None;
             }
             if let Some((dx, dy)) = nudge {
-                let indices = self.selected_element_indices();
+                let indices = self.editable_selected_element_indices();
                 for index in indices {
                     if let Some(element) = self.template.pages[self.current_page]
                         .elements
@@ -2191,6 +2377,7 @@ struct ElementPaintOptions {
     index: usize,
     selected: bool,
     primary: bool,
+    locked: bool,
     paint_content: bool,
 }
 
@@ -2891,11 +3078,15 @@ fn paint_element(
         let response = ui.interact(
             rect,
             Id::new(("canvas-line", options.index)),
-            Sense::click_and_drag(),
+            if options.locked {
+                Sense::click()
+            } else {
+                Sense::click_and_drag()
+            },
         );
         interaction.clicked = response.clicked();
         interaction.drag_stopped |= response.drag_stopped();
-        if response.hovered() {
+        if response.hovered() && !options.locked {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
         }
         if options.selected {
@@ -2906,7 +3097,7 @@ fn paint_element(
                 StrokeKind::Outside,
             );
         }
-        if options.primary {
+        if options.primary && !options.locked {
             for (endpoint, center) in [(LineEndpoint::Start, start), (LineEndpoint::End, end)] {
                 let handle = Rect::from_center_size(center, Vec2::splat(12.0));
                 painter.rect_filled(handle, CornerRadius::same(2), Color32::WHITE);
@@ -2932,7 +3123,7 @@ fn paint_element(
                 }
             }
         }
-        if interaction.line_endpoint.is_none() && response.dragged() {
+        if !options.locked && interaction.line_endpoint.is_none() && response.dragged() {
             interaction.translate = Some(response.drag_delta());
         }
         return interaction;
@@ -2955,14 +3146,18 @@ fn paint_element(
     let response = ui.interact(
         interaction_bounds,
         Id::new(("canvas-element", options.index)),
-        Sense::click_and_drag(),
+        if options.locked {
+            Sense::click()
+        } else {
+            Sense::click_and_drag()
+        },
     );
     interaction.clicked = response.clicked();
     interaction.drag_stopped |= response.drag_stopped();
-    if response.dragged() {
+    if !options.locked && response.dragged() {
         interaction.translate = Some(response.drag_delta());
     }
-    if response.hovered() {
+    if response.hovered() && !options.locked {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
     }
     if options.selected {
@@ -2974,7 +3169,7 @@ fn paint_element(
             transform,
         );
     }
-    if options.primary {
+    if options.primary && !options.locked {
         let resize_center = transform.point(rect.right_top());
         let handle = Rect::from_center_size(resize_center, Vec2::splat(12.0));
         painter.rect_filled(handle, CornerRadius::same(2), ORANGE);
@@ -3242,7 +3437,7 @@ fn alignment_targets(
         }
     }
     for (index, element) in elements.iter().enumerate() {
-        if excluded_indices.contains(&index) {
+        if excluded_indices.contains(&index) || !element.is_visible() {
             continue;
         }
         if let Some(bounds) = element_alignment_bounds(element) {
@@ -3834,6 +4029,39 @@ fn element_properties(ui: &mut egui::Ui, element: &mut Element) -> bool {
     changed
 }
 
+fn layer_properties(ui: &mut egui::Ui, element: &mut Element) -> bool {
+    section_label(ui, "LAYER");
+    ui.label("Name");
+    let mut name = element.layer_name().unwrap_or_default().to_owned();
+    let mut changed = false;
+    if ui
+        .add(
+            egui::TextEdit::singleline(&mut name)
+                .desired_width(f32::INFINITY)
+                .hint_text("Use the generated layer name"),
+        )
+        .changed()
+    {
+        element.set_layer_name((!name.trim().is_empty()).then_some(name));
+        changed = true;
+    }
+    let mut visible = element.is_visible();
+    if ui
+        .checkbox(&mut visible, "Visible in canvas and PDF")
+        .changed()
+    {
+        element.set_visible(visible);
+        changed = true;
+    }
+    let mut locked = element.is_locked();
+    if ui.checkbox(&mut locked, "Lock editing").changed() {
+        element.set_locked(locked);
+        changed = true;
+    }
+    ui.add_space(12.0);
+    changed
+}
+
 fn length_editor(ui: &mut egui::Ui, label: &str, length: &mut Length, id: &str) -> bool {
     ui.label(label);
     ui.horizontal(|ui| {
@@ -4122,7 +4350,7 @@ mod tests {
         PersistedState, PreviewErrorCopy, ScreenTransform, Selection, aligned_preview_text_origin,
         alignment_targets, first_template_variable, guide_position_from_pointer,
         inverse_rotate_vector, parse_color, preview_error_copy, print_color, push_editor_guide,
-        resolve_preview, rgb_hex, safe_stem, serialize_template,
+        remap_selection_after_layer_move, resolve_preview, rgb_hex, safe_stem, serialize_template,
     };
     use crate::model::{ElementKind, new_element, starter_template};
 
@@ -4132,6 +4360,22 @@ mod tests {
         let json = serialize_template(&template).unwrap();
         assert!(json.ends_with('\n'));
         assert_eq!(template, serde_json::from_str(&json).unwrap());
+    }
+
+    #[test]
+    fn dragged_layers_preserve_multi_selection_membership_and_primary() {
+        let selection = Selection::Elements {
+            indices: [0, 2].into_iter().collect(),
+            primary: 0,
+        };
+
+        assert_eq!(
+            remap_selection_after_layer_move(&selection, 0, 2),
+            Selection::Elements {
+                indices: [1, 2].into_iter().collect(),
+                primary: 2,
+            }
+        );
     }
 
     #[test]

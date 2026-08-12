@@ -308,8 +308,121 @@ pub enum Element {
     PageBreak,
 }
 
+impl Element {
+    pub fn layer_name(&self) -> Option<&str> {
+        match self {
+            Self::Text(element) => element.name.as_deref(),
+            Self::Image(element) => element.name.as_deref(),
+            Self::Rectangle(element) => element.name.as_deref(),
+            Self::Line(element) => element.name.as_deref(),
+            Self::Svg(element) => element.name.as_deref(),
+            Self::QrCode(element) => element.name.as_deref(),
+            Self::Barcode(element) => element.name.as_deref(),
+            Self::Group(element) => element.name.as_deref(),
+            Self::Stack(element) => element.name.as_deref(),
+            Self::Table(element) => element.name.as_deref(),
+            Self::Repeater(element) => element.name.as_deref(),
+            Self::PageBreak => None,
+        }
+    }
+
+    pub fn set_layer_name(&mut self, name: Option<String>) {
+        let target = match self {
+            Self::Text(element) => &mut element.name,
+            Self::Image(element) => &mut element.name,
+            Self::Rectangle(element) => &mut element.name,
+            Self::Line(element) => &mut element.name,
+            Self::Svg(element) => &mut element.name,
+            Self::QrCode(element) => &mut element.name,
+            Self::Barcode(element) => &mut element.name,
+            Self::Group(element) => &mut element.name,
+            Self::Stack(element) => &mut element.name,
+            Self::Table(element) => &mut element.name,
+            Self::Repeater(element) => &mut element.name,
+            Self::PageBreak => return,
+        };
+        *target = name;
+    }
+
+    pub fn is_visible(&self) -> bool {
+        match self {
+            Self::Text(element) => element.visible,
+            Self::Image(element) => element.visible,
+            Self::Rectangle(element) => element.visible,
+            Self::Line(element) => element.visible,
+            Self::Svg(element) => element.visible,
+            Self::QrCode(element) => element.visible,
+            Self::Barcode(element) => element.visible,
+            Self::Group(element) => element.visible,
+            Self::Stack(element) => element.visible,
+            Self::Table(element) => element.visible,
+            Self::Repeater(element) => element.visible,
+            Self::PageBreak => true,
+        }
+    }
+
+    pub fn set_visible(&mut self, visible: bool) {
+        let target = match self {
+            Self::Text(element) => &mut element.visible,
+            Self::Image(element) => &mut element.visible,
+            Self::Rectangle(element) => &mut element.visible,
+            Self::Line(element) => &mut element.visible,
+            Self::Svg(element) => &mut element.visible,
+            Self::QrCode(element) => &mut element.visible,
+            Self::Barcode(element) => &mut element.visible,
+            Self::Group(element) => &mut element.visible,
+            Self::Stack(element) => &mut element.visible,
+            Self::Table(element) => &mut element.visible,
+            Self::Repeater(element) => &mut element.visible,
+            Self::PageBreak => return,
+        };
+        *target = visible;
+    }
+
+    pub fn is_locked(&self) -> bool {
+        match self {
+            Self::Text(element) => element.locked,
+            Self::Image(element) => element.locked,
+            Self::Rectangle(element) => element.locked,
+            Self::Line(element) => element.locked,
+            Self::Svg(element) => element.locked,
+            Self::QrCode(element) => element.locked,
+            Self::Barcode(element) => element.locked,
+            Self::Group(element) => element.locked,
+            Self::Stack(element) => element.locked,
+            Self::Table(element) => element.locked,
+            Self::Repeater(element) => element.locked,
+            Self::PageBreak => false,
+        }
+    }
+
+    pub fn set_locked(&mut self, locked: bool) {
+        let target = match self {
+            Self::Text(element) => &mut element.locked,
+            Self::Image(element) => &mut element.locked,
+            Self::Rectangle(element) => &mut element.locked,
+            Self::Line(element) => &mut element.locked,
+            Self::Svg(element) => &mut element.locked,
+            Self::QrCode(element) => &mut element.locked,
+            Self::Barcode(element) => &mut element.locked,
+            Self::Group(element) => &mut element.locked,
+            Self::Stack(element) => &mut element.locked,
+            Self::Table(element) => &mut element.locked,
+            Self::Repeater(element) => &mut element.locked,
+            Self::PageBreak => return,
+        };
+        *target = locked;
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TextElement {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub visible: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub locked: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub position: Option<Bounds>,
     pub value: String,
@@ -365,6 +478,12 @@ pub enum TextAlign {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ImageElement {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub visible: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub locked: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub position: Option<Bounds>,
     pub source: String,
     #[serde(default)]
@@ -385,6 +504,12 @@ pub enum ImageFit {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RectangleElement {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub visible: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub locked: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub position: Option<Bounds>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -416,6 +541,12 @@ pub enum DashStyle {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LineElement {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub visible: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub locked: bool,
     pub x1: Length,
     pub y1: Length,
     pub x2: Length,
@@ -430,6 +561,12 @@ pub struct LineElement {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SvgElement {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub visible: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub locked: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub position: Option<Bounds>,
     pub source: String,
     #[serde(default)]
@@ -442,6 +579,12 @@ pub struct SvgElement {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct QrCodeElement {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub visible: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub locked: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub position: Option<Bounds>,
     pub value: String,
@@ -472,6 +615,12 @@ pub enum QrErrorCorrection {
 #[serde(deny_unknown_fields)]
 pub struct BarcodeElement {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub visible: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub locked: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub position: Option<Bounds>,
     pub value: String,
     #[serde(default)]
@@ -497,6 +646,12 @@ pub enum BarcodeFormat {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GroupElement {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub visible: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub locked: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub position: Option<Bounds>,
     #[serde(default)]
     pub children: Vec<Element>,
@@ -504,6 +659,12 @@ pub struct GroupElement {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StackElement {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub visible: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub locked: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub position: Option<Bounds>,
     #[serde(default)]
@@ -541,6 +702,12 @@ pub enum FlowOverflow {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TableElement {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub visible: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub locked: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub position: Option<Bounds>,
     pub source: String,
@@ -618,6 +785,12 @@ pub enum TableDateStyle {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RepeaterElement {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub visible: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub locked: bool,
     pub source: String,
     #[serde(default)]
     pub layout: RepeatLayout,
@@ -635,6 +808,18 @@ pub enum RepeatLayout {
 
 fn default_color() -> String {
     "#000000".to_owned()
+}
+
+const fn default_true() -> bool {
+    true
+}
+
+fn is_true(value: &bool) -> bool {
+    *value
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 fn is_zero_f32(value: &f32) -> bool {
@@ -879,5 +1064,47 @@ mod tests {
             serde_json::to_value(&rotated).unwrap()["pages"][0]["elements"][0]["rotation"],
             22.5
         );
+    }
+
+    #[test]
+    fn layer_metadata_is_backward_compatible_and_omits_safe_defaults() {
+        let mut template: Template = serde_json::from_str(
+            r##"{
+              "name": "Layers",
+              "document": {
+                "width": { "value": 100, "unit": "points" },
+                "height": { "value": 100, "unit": "points" }
+              },
+              "pages": [{ "elements": [{
+                "type": "text",
+                "value": "Label",
+                "font_size": { "value": 10, "unit": "points" }
+              }] }]
+            }"##,
+        )
+        .unwrap();
+        {
+            let element = &template.pages[0].elements[0];
+            assert_eq!(element.layer_name(), None);
+            assert!(element.is_visible());
+            assert!(!element.is_locked());
+        }
+        let defaults = serde_json::to_value(&template).unwrap();
+        let defaults = &defaults["pages"][0]["elements"][0];
+        assert!(defaults.get("name").is_none());
+        assert!(defaults.get("visible").is_none());
+        assert!(defaults.get("locked").is_none());
+
+        {
+            let element = &mut template.pages[0].elements[0];
+            element.set_layer_name(Some("Customer name".to_owned()));
+            element.set_visible(false);
+            element.set_locked(true);
+        }
+        let explicit = serde_json::to_value(&template).unwrap();
+        let explicit = &explicit["pages"][0]["elements"][0];
+        assert_eq!(explicit["name"], "Customer name");
+        assert_eq!(explicit["visible"], false);
+        assert_eq!(explicit["locked"], true);
     }
 }
