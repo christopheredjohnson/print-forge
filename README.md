@@ -48,6 +48,16 @@ to migrate one into a project folder. The PDF engine already bundles the
 Helvetica family, so projects only need `assets/fonts/` when they use additional
 font families.
 
+Studio's Assets panel imports PNG, JPEG, and SVG files into `assets/images/`
+and TTF/OTF faces into `assets/fonts/`. Managed artwork can be placed on the
+current page from the panel or assigned from an image/SVG inspector without
+typing a path. Font imports use the family and style metadata stored in the
+font, and imported families appear in the text inspector. Import the regular
+face together with (or before) bold, italic, and bold-italic variants; Studio
+warns when a selected custom style is not available. Missing local references
+are called out in the Assets panel. Helvetica remains available as a bundled
+choice and is not copied into each project.
+
 The initial Studio supports native open/save dialogs, multipage projects,
 draggable, resizable, and rotatable page elements, named layers with persisted
 visibility and editing locks, drag-to-reorder paint order,
@@ -396,10 +406,10 @@ The roadmap below contains only unfinished work. Priorities favor a dependable
 
 ### P0 — Ship a usable 0.1 release
 
-- [ ] Make Print Forge Studio a supported no-code authoring path: add visual
-      inspectors for every MVP element, asset/font management, representative data-row
-      selection, and an exact PDF-rasterized typography preview; then include
-      the desktop app in release packaging.
+- [ ] Make Print Forge Studio a supported no-code authoring path: add the
+      remaining visual inspectors for every MVP element, representative
+      data-row selection, and an exact PDF-rasterized typography preview; then
+      include the desktop app in release packaging.
 - [ ] Generate and publish a versioned JSON Schema plus a human-readable
       template reference covering every field, element, default, constraint,
       and unsupported combination, with a valid example for each element type.

@@ -19,7 +19,7 @@ use print_forge_engine::{
 };
 use print_forge_pdf::{PdfRenderOptions, PdfRenderer};
 use print_forge_template::{
-    Color as PrintColor, DashStyle, Element, FieldType, FontStyle, ImageFit, Length,
+    Color as PrintColor, DashStyle, Element, FieldType, FontFamily, FontStyle, ImageFit, Length,
     QrErrorCorrection, Template, TextAlign, TextOverflow, Unit,
 };
 use print_forge_validation::{ValidationReport, validate_template};
@@ -33,7 +33,10 @@ use crate::model::{
     reorder_element, resize_element, set_element_rotation, snap_point, snap_size, snap_translation,
     starter_template, translate_element, translate_line_endpoint,
 };
-use crate::project::{PROJECT_MANIFEST, save_project_folder};
+use crate::project::{
+    ManagedAsset, ManagedAssetKind, PROJECT_MANIFEST, font_style_label, import_font_assets,
+    import_visual_asset, list_managed_assets, missing_local_assets, save_project_folder,
+};
 
 const APP_STATE_KEY: &str = "print-forge-studio-state";
 const ORANGE: Color32 = Color32::from_rgb(244, 91, 32);
@@ -616,6 +619,187 @@ impl StudioApp {
             .to_owned()
     }
 
+    fn project_root(&self) -> Option<PathBuf> {
+        self.current_path
+            .as_deref()
+            .filter(|path| is_project_manifest(path))
+            .and_then(Path::parent)
+            .map(Path::to_owned)
+    }
+
+    fn ensure_project_root(&mut self) -> Option<PathBuf> {
+        if self.project_root().is_none() {
+            self.save_project(true);
+        }
+        self.project_root()
+    }
+
+    fn import_visual_assets(&mut self) {
+        let Some(project_root) = self.ensure_project_root() else {
+            return;
+        };
+        let Some(paths) = FileDialog::new()
+            .add_filter("Images and SVG artwork", &["png", "jpg", "jpeg", "svg"])
+            .set_title("Import visual assets")
+            .pick_files()
+        else {
+            return;
+        };
+        let mut imported = Vec::new();
+        for path in paths {
+            match import_visual_asset(&path, &project_root) {
+                Ok(asset) => imported.push(asset),
+                Err(error) => {
+                    self.set_notice(NoticeKind::Error, format!("Import failed: {error}"));
+                    return;
+                }
+            }
+        }
+        self.asset_cache.textures.clear();
+        self.set_notice(
+            NoticeKind::Success,
+            format!("Imported {} visual asset(s)", imported.len()),
+        );
+    }
+
+    fn import_fonts(&mut self) {
+        let Some(project_root) = self.ensure_project_root() else {
+            return;
+        };
+        let Some(paths) = FileDialog::new()
+            .add_filter("OpenType fonts", &["ttf", "otf"])
+            .set_title("Import custom font faces")
+            .pick_files()
+        else {
+            return;
+        };
+        match import_font_assets(&paths, &project_root, &mut self.template.fonts) {
+            Ok(imported) => {
+                self.dirty = true;
+                let summary = imported
+                    .iter()
+                    .map(|font| format!("{} {}", font.family, font_style_label(font.style)))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                self.set_notice(
+                    NoticeKind::Success,
+                    format!("Imported {} font face(s): {summary}", imported.len()),
+                );
+            }
+            Err(error) => {
+                self.set_notice(NoticeKind::Error, format!("Font import failed: {error}"))
+            }
+        }
+    }
+
+    fn place_visual_asset(&mut self, asset: &ManagedAsset) {
+        let kind = match asset.kind {
+            ManagedAssetKind::RasterImage => ElementKind::Image,
+            ManagedAssetKind::Svg => ElementKind::Svg,
+            ManagedAssetKind::Font => return,
+        };
+        let offset = (self.template.pages[self.current_page].elements.len() % 8) as f32 * 9.0;
+        let mut element = new_element(kind, offset);
+        match &mut element {
+            Element::Image(image) => image.source = asset.relative_path.clone(),
+            Element::Svg(svg) => svg.source = asset.relative_path.clone(),
+            _ => unreachable!(),
+        }
+        self.template.pages[self.current_page]
+            .elements
+            .push(element);
+        let index = self.template.pages[self.current_page].elements.len() - 1;
+        self.selection = Selection::Element(index);
+        self.dirty = true;
+    }
+
+    fn asset_panel(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            section_label(ui, "ASSETS");
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if small_button(ui, "+ Font").clicked() {
+                    self.import_fonts();
+                }
+                if small_button(ui, "+ Image").clicked() {
+                    self.import_visual_assets();
+                }
+            });
+        });
+        let Some(project_root) = self.project_root() else {
+            ui.label(
+                RichText::new("Save this template as a project to manage local assets.")
+                    .color(Color32::from_gray(145))
+                    .small(),
+            );
+            return;
+        };
+        let assets = match list_managed_assets(&project_root) {
+            Ok(assets) => assets,
+            Err(error) => {
+                ui.label(RichText::new(error).color(Color32::from_rgb(242, 111, 111)));
+                return;
+            }
+        };
+        let missing = missing_local_assets(&self.template, &project_root);
+        if !missing.is_empty() {
+            ui.label(
+                RichText::new(format!("{} missing local reference(s)", missing.len()))
+                    .color(Color32::from_rgb(242, 111, 111))
+                    .strong(),
+            );
+            for source in missing.iter().take(3) {
+                ui.label(
+                    RichText::new(source)
+                        .color(Color32::from_rgb(242, 150, 130))
+                        .monospace()
+                        .small(),
+                );
+            }
+        }
+        if assets.is_empty() {
+            ui.label(
+                RichText::new("No managed assets yet")
+                    .color(Color32::from_gray(135))
+                    .italics(),
+            );
+        }
+        for asset in assets {
+            ui.horizontal(|ui| {
+                ui.vertical(|ui| {
+                    ui.label(
+                        RichText::new(format!("{} · {}", asset.kind.label(), asset.file_name))
+                            .color(Color32::from_gray(220))
+                            .small(),
+                    );
+                    ui.label(
+                        RichText::new(format_bytes(asset.bytes))
+                            .color(Color32::from_gray(130))
+                            .small(),
+                    );
+                });
+                if asset.kind != ManagedAssetKind::Font
+                    && ui
+                        .small_button("Place")
+                        .on_hover_text("Add this asset to the current page")
+                        .clicked()
+                {
+                    self.place_visual_asset(&asset);
+                }
+            });
+        }
+        if !self.template.fonts.is_empty() {
+            ui.add_space(6.0);
+            ui.label(
+                RichText::new(format!(
+                    "{} custom font family/families · Helvetica is bundled",
+                    self.template.fonts.len()
+                ))
+                .color(Color32::from_gray(145))
+                .small(),
+            );
+        }
+    }
+
     fn drag_from_origin(
         &mut self,
         index: usize,
@@ -1028,6 +1212,9 @@ impl StudioApp {
                                 }
                             }
                         });
+
+                    ui.add_space(16.0);
+                    self.asset_panel(ui);
 
                     ui.add_space(16.0);
                     section_label(ui, "LAYERS");
@@ -1520,6 +1707,11 @@ impl StudioApp {
             &self.template.pages[self.current_page].elements[index],
             index,
         );
+        let custom_fonts = self.template.fonts.to_vec();
+        let managed_assets = self
+            .project_root()
+            .and_then(|root| list_managed_assets(&root).ok())
+            .unwrap_or_default();
         ui.heading(label);
         let element = &mut self.template.pages[self.current_page].elements[index];
         let mut changed = layer_properties(ui, element);
@@ -1533,7 +1725,9 @@ impl StudioApp {
             ui.add_space(12.0);
         }
         changed |= ui
-            .add_enabled_ui(!locked, |ui| element_properties(ui, element))
+            .add_enabled_ui(!locked, |ui| {
+                element_properties(ui, element, &custom_fonts, &managed_assets)
+            })
             .inner;
         self.dirty |= changed;
         ui.add_space(16.0);
@@ -3922,7 +4116,12 @@ fn document_inspector(ui: &mut egui::Ui, template: &mut Template) -> bool {
     changed
 }
 
-fn element_properties(ui: &mut egui::Ui, element: &mut Element) -> bool {
+fn element_properties(
+    ui: &mut egui::Ui,
+    element: &mut Element,
+    custom_fonts: &[FontFamily],
+    managed_assets: &[ManagedAsset],
+) -> bool {
     let mut changed = false;
     if let Some(bounds) = element_bounds_mut(element) {
         section_label(ui, "POSITION & SIZE");
@@ -3972,7 +4171,7 @@ fn element_properties(ui: &mut egui::Ui, element: &mut Element) -> bool {
                 )
                 .changed();
             changed |= length_editor(ui, "Font size", &mut text.font_size, "text-font-size");
-            changed |= optional_text(ui, "Font family", &mut text.font);
+            changed |= font_family_editor(ui, &mut text.font, custom_fonts);
             changed |= enum_combo(
                 ui,
                 "Style",
@@ -3984,6 +4183,19 @@ fn element_properties(ui: &mut egui::Ui, element: &mut Element) -> bool {
                     (FontStyle::BoldItalic, "Bold italic"),
                 ],
             );
+            if let Some(font_name) = text.font.as_deref()
+                && let Some(family) = custom_fonts.iter().find(|family| family.name == font_name)
+                && !font_family_has_style(family, text.font_style)
+            {
+                ui.label(
+                    RichText::new(format!(
+                        "Import the {} face for {font_name} before rendering.",
+                        font_style_name(text.font_style)
+                    ))
+                    .color(Color32::from_rgb(242, 111, 111))
+                    .small(),
+                );
+            }
             changed |= enum_combo(
                 ui,
                 "Alignment",
@@ -4028,12 +4240,24 @@ fn element_properties(ui: &mut egui::Ui, element: &mut Element) -> bool {
         }
         Element::Image(image) => {
             section_label(ui, "IMAGE");
-            changed |= string_editor(ui, "Source path", &mut image.source);
+            changed |= managed_asset_editor(
+                ui,
+                "Source path",
+                &mut image.source,
+                managed_assets,
+                ManagedAssetKind::RasterImage,
+            );
             changed |= image_fit_combo(ui, &mut image.fit);
         }
         Element::Svg(svg) => {
             section_label(ui, "VECTOR SVG");
-            changed |= string_editor(ui, "Source path", &mut svg.source);
+            changed |= managed_asset_editor(
+                ui,
+                "Source path",
+                &mut svg.source,
+                managed_assets,
+                ManagedAssetKind::Svg,
+            );
             changed |= image_fit_combo(ui, &mut svg.fit);
         }
         Element::QrCode(qr) => {
@@ -4214,9 +4438,106 @@ fn image_fit_combo(ui: &mut egui::Ui, fit: &mut ImageFit) -> bool {
     )
 }
 
+fn font_family_editor(
+    ui: &mut egui::Ui,
+    font: &mut Option<String>,
+    custom_fonts: &[FontFamily],
+) -> bool {
+    ui.label("Font family");
+    let previous = font.clone();
+    let selected = font.as_deref().unwrap_or("Helvetica (default)");
+    ComboBox::from_id_salt("text-font-family")
+        .selected_text(selected)
+        .width(ui.available_width())
+        .show_ui(ui, |ui| {
+            ui.selectable_value(font, None, "Helvetica (default)");
+            for builtin in ["Helvetica", "Times", "Courier"] {
+                ui.selectable_value(font, Some(builtin.to_owned()), builtin);
+            }
+            if !custom_fonts.is_empty() {
+                ui.separator();
+                for family in custom_fonts {
+                    ui.selectable_value(font, Some(family.name.clone()), &family.name);
+                }
+            }
+        });
+    previous != *font
+}
+
+fn font_family_has_style(family: &FontFamily, style: FontStyle) -> bool {
+    match style {
+        FontStyle::Regular => true,
+        FontStyle::Bold => family.bold.is_some(),
+        FontStyle::Italic => family.italic.is_some(),
+        FontStyle::BoldItalic => family.bold_italic.is_some(),
+    }
+}
+
+const fn font_style_name(style: FontStyle) -> &'static str {
+    match style {
+        FontStyle::Regular => "regular",
+        FontStyle::Bold => "bold",
+        FontStyle::Italic => "italic",
+        FontStyle::BoldItalic => "bold italic",
+    }
+}
+
+fn managed_asset_editor(
+    ui: &mut egui::Ui,
+    label: &str,
+    source: &mut String,
+    managed_assets: &[ManagedAsset],
+    kind: ManagedAssetKind,
+) -> bool {
+    ui.label(label);
+    let previous = source.clone();
+    let choices = managed_assets
+        .iter()
+        .filter(|asset| asset.kind == kind)
+        .collect::<Vec<_>>();
+    if !choices.is_empty() {
+        ComboBox::from_id_salt(("managed-asset", label, kind.label()))
+            .selected_text(
+                choices
+                    .iter()
+                    .find(|asset| asset.relative_path == *source)
+                    .map_or_else(|| source.as_str(), |asset| asset.file_name.as_str()),
+            )
+            .width(ui.available_width())
+            .show_ui(ui, |ui| {
+                for asset in choices {
+                    ui.selectable_value(source, asset.relative_path.clone(), &asset.file_name);
+                }
+            });
+        ui.label(
+            RichText::new("Managed project asset")
+                .color(Color32::from_gray(135))
+                .small(),
+        );
+    }
+    let text_changed = ui
+        .add(
+            egui::TextEdit::singleline(source)
+                .desired_width(f32::INFINITY)
+                .hint_text("assets/images/example.png or {{field}}"),
+        )
+        .changed();
+    text_changed || previous != *source
+}
+
 fn string_editor(ui: &mut egui::Ui, label: &str, value: &mut String) -> bool {
     ui.label(label);
     ui.text_edit_singleline(value).changed()
+}
+
+fn format_bytes(bytes: u64) -> String {
+    if bytes >= 1_048_576 {
+        format!("{:.1} MB", bytes as f64 / 1_048_576.0)
+    } else if bytes >= 1_024 {
+        format!("{:.1} KB", bytes as f64 / 1_024.0)
+    } else {
+        format!("{bytes} B")
+    }
 }
 
 fn color_editor(ui: &mut egui::Ui, label: &str, value: &mut String) -> bool {
