@@ -27,10 +27,11 @@ use rfd::{FileDialog, MessageButtons, MessageDialog, MessageDialogResult, Messag
 use serde::{Deserialize, Serialize};
 
 use crate::model::{
-    ElementKind, LayerMove, LineEndpoint, SnapResult, blank_page, bounds_points,
-    element_alignment_bounds, element_bounds, element_bounds_mut, element_label, element_rotation,
-    new_element, new_field, reorder_element, resize_element, set_element_rotation, snap_point,
-    snap_size, snap_translation, starter_template, translate_element, translate_line_endpoint,
+    AlignMode, DistributionAxis, ElementKind, LayerMove, LineEndpoint, SnapResult, align_elements,
+    blank_page, bounds_points, distribute_elements, element_alignment_bounds, element_bounds,
+    element_bounds_mut, element_label, element_rotation, new_element, new_field, reorder_element,
+    resize_element, set_element_rotation, snap_point, snap_size, snap_translation,
+    starter_template, translate_element, translate_line_endpoint,
 };
 
 const APP_STATE_KEY: &str = "print-forge-studio-state";
@@ -41,12 +42,16 @@ const PANEL_DEEP: Color32 = Color32::from_rgb(26, 31, 36);
 const CREAM: Color32 = Color32::from_rgb(250, 247, 239);
 const HISTORY_LIMIT: usize = 100;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 enum Selection {
     Document,
     Page,
     Field(usize),
     Element(usize),
+    Elements {
+        indices: BTreeSet<usize>,
+        primary: usize,
+    },
 }
 
 #[derive(Serialize, Deserialize)]
@@ -100,6 +105,7 @@ struct ElementDragState {
     index: usize,
     kind: ElementDragKind,
     original: Element,
+    originals: Vec<(usize, Element)>,
     accumulated: Vec2,
 }
 
@@ -538,21 +544,37 @@ impl StudioApp {
         index: usize,
         kind: ElementDragKind,
         frame_delta: Vec2,
-    ) -> (Element, Vec2) {
+    ) -> (Element, Vec2, Vec<(usize, Element)>) {
         let should_reset = self.active_drag.as_ref().is_none_or(|drag| {
             drag.page != self.current_page || drag.index != index || drag.kind != kind
         });
         if should_reset {
+            let mut indices = self.selected_element_indices();
+            if !indices.contains(&index) {
+                indices = vec![index];
+            }
+            let originals = indices
+                .into_iter()
+                .filter_map(|selected_index| {
+                    self.template.pages[self.current_page]
+                        .elements
+                        .get(selected_index)
+                        .cloned()
+                        .map(|element| (selected_index, element))
+                })
+                .collect();
             self.active_drag = Some(ElementDragState {
                 page: self.current_page,
                 index,
                 kind,
                 original: self.template.pages[self.current_page].elements[index].clone(),
+                originals,
                 accumulated: Vec2::ZERO,
             });
         }
         let drag = self.active_drag.as_mut().unwrap();
-        drag.advance(frame_delta)
+        let (original, accumulated) = drag.advance(frame_delta);
+        (original, accumulated, drag.originals.clone())
     }
 
     fn confirm_discard(&self) -> bool {
@@ -575,12 +597,130 @@ impl StudioApp {
         };
     }
 
+    fn selected_element_indices(&self) -> Vec<usize> {
+        match &self.selection {
+            Selection::Element(index) => vec![*index],
+            Selection::Elements { indices, .. } => indices.iter().copied().collect(),
+            Selection::Document | Selection::Page | Selection::Field(_) => Vec::new(),
+        }
+    }
+
+    fn is_element_selected(&self, index: usize) -> bool {
+        match &self.selection {
+            Selection::Element(selected) => *selected == index,
+            Selection::Elements { indices, .. } => indices.contains(&index),
+            Selection::Document | Selection::Page | Selection::Field(_) => false,
+        }
+    }
+
+    fn is_primary_element(&self, index: usize) -> bool {
+        match &self.selection {
+            Selection::Element(selected) => *selected == index,
+            Selection::Elements { primary, .. } => *primary == index,
+            Selection::Document | Selection::Page | Selection::Field(_) => false,
+        }
+    }
+
+    fn select_element(&mut self, index: usize, additive: bool) {
+        if !additive {
+            self.selection = Selection::Element(index);
+            return;
+        }
+        let mut indices = self
+            .selected_element_indices()
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        if !indices.insert(index) {
+            indices.remove(&index);
+        }
+        self.selection = match indices.len() {
+            0 => Selection::Page,
+            1 => Selection::Element(*indices.first().unwrap()),
+            _ => Selection::Elements {
+                indices,
+                primary: index,
+            },
+        };
+        self.active_drag = None;
+    }
+
+    fn align_selection(&mut self, mode: AlignMode) {
+        let indices = self.selected_element_indices();
+        if align_elements(
+            &mut self.template.pages[self.current_page].elements,
+            &indices,
+            mode,
+        ) {
+            self.dirty = true;
+        }
+    }
+
+    fn distribute_selection(&mut self, axis: DistributionAxis) {
+        let indices = self.selected_element_indices();
+        if distribute_elements(
+            &mut self.template.pages[self.current_page].elements,
+            &indices,
+            axis,
+        ) {
+            self.dirty = true;
+        }
+    }
+
+    fn duplicate_selection(&mut self) {
+        let indices = self.selected_element_indices();
+        if indices.is_empty() {
+            return;
+        }
+        let duplicates = indices
+            .iter()
+            .filter_map(|index| {
+                self.template.pages[self.current_page]
+                    .elements
+                    .get(*index)
+                    .cloned()
+            })
+            .collect::<Vec<_>>();
+        let first = self.template.pages[self.current_page].elements.len();
+        self.template.pages[self.current_page]
+            .elements
+            .extend(duplicates);
+        let selected =
+            (first..self.template.pages[self.current_page].elements.len()).collect::<BTreeSet<_>>();
+        self.selection = if selected.len() == 1 {
+            Selection::Element(first)
+        } else {
+            Selection::Elements {
+                indices: selected,
+                primary: first,
+            }
+        };
+        self.dirty = true;
+    }
+
+    fn delete_selection(&mut self) {
+        let mut indices = self.selected_element_indices();
+        if indices.is_empty() {
+            return;
+        }
+        indices.sort_unstable_by(|left, right| right.cmp(left));
+        for index in indices {
+            if index < self.template.pages[self.current_page].elements.len() {
+                self.template.pages[self.current_page]
+                    .elements
+                    .remove(index);
+            }
+        }
+        self.selection = Selection::Page;
+        self.active_drag = None;
+        self.dirty = true;
+    }
+
     fn edit_snapshot(&self) -> EditSnapshot {
         EditSnapshot {
             template: self.template.clone(),
             guides: self.guides.clone(),
             current_page: self.current_page,
-            selection: self.selection,
+            selection: self.selection.clone(),
         }
     }
 
@@ -781,13 +921,12 @@ impl StudioApp {
                         .map(|(index, element)| element_label(element, index))
                         .collect();
                     for (index, label) in labels.iter().enumerate().rev() {
-                        if selectable_row(ui, self.selection == Selection::Element(index), label)
-                            .clicked()
-                        {
-                            self.selection = Selection::Element(index);
+                        if selectable_row(ui, self.is_element_selected(index), label).clicked() {
+                            let additive = ui.input(|input| input.modifiers.shift);
+                            self.select_element(index, additive);
                         }
                     }
-                    if let Selection::Element(index) = self.selection {
+                    if let Selection::Element(index) = self.selection.clone() {
                         let layer_count = self.template.pages[self.current_page].elements.len();
                         ui.add_space(6.0);
                         ui.horizontal(|ui| {
@@ -890,7 +1029,7 @@ impl StudioApp {
             .show(ctx, |ui| {
                 section_label(ui, "INSPECTOR");
                 ui.add_space(4.0);
-                ScrollArea::vertical().show(ui, |ui| match self.selection {
+                ScrollArea::vertical().show(ui, |ui| match self.selection.clone() {
                     Selection::Document => {
                         if document_inspector(ui, &mut self.template) {
                             self.dirty = true;
@@ -899,8 +1038,78 @@ impl StudioApp {
                     Selection::Page => self.page_inspector(ui),
                     Selection::Field(index) => self.field_inspector(ui, index),
                     Selection::Element(index) => self.element_inspector(ui, index),
+                    Selection::Elements { indices, .. } => {
+                        self.multi_element_inspector(ui, &indices)
+                    }
                 });
             });
+    }
+
+    fn multi_element_inspector(&mut self, ui: &mut egui::Ui, indices: &BTreeSet<usize>) {
+        ui.heading(format!("{} layers selected", indices.len()));
+        ui.label(
+            RichText::new("Shift-click the canvas or Layers list to change the selection.")
+                .color(Color32::from_gray(155)),
+        );
+        ui.add_space(14.0);
+        self.alignment_controls(ui, indices.len());
+        ui.add_space(16.0);
+        ui.horizontal(|ui| {
+            if ui.button("Duplicate selected").clicked() {
+                self.duplicate_selection();
+            }
+            if danger_button(ui, "Delete selected").clicked() {
+                self.delete_selection();
+            }
+        });
+    }
+
+    fn alignment_controls(&mut self, ui: &mut egui::Ui, selected_count: usize) {
+        section_label(ui, "ALIGN");
+        ui.horizontal_wrapped(|ui| {
+            for (label, mode, help) in [
+                ("Left", AlignMode::Left, "Align left edges"),
+                (
+                    "H center",
+                    AlignMode::HorizontalCenter,
+                    "Align horizontal centers",
+                ),
+                ("Right", AlignMode::Right, "Align right edges"),
+                ("Bottom", AlignMode::Bottom, "Align bottom edges"),
+                (
+                    "V center",
+                    AlignMode::VerticalCenter,
+                    "Align vertical centers",
+                ),
+                ("Top", AlignMode::Top, "Align top edges"),
+            ] {
+                if ui
+                    .add_enabled(selected_count >= 2, egui::Button::new(label))
+                    .on_hover_text(help)
+                    .clicked()
+                {
+                    self.align_selection(mode);
+                }
+            }
+        });
+        ui.add_space(10.0);
+        section_label(ui, "DISTRIBUTE");
+        ui.horizontal(|ui| {
+            if ui
+                .add_enabled(selected_count >= 3, egui::Button::new("Horizontal gaps"))
+                .on_hover_text("Distribute with equal horizontal gaps")
+                .clicked()
+            {
+                self.distribute_selection(DistributionAxis::Horizontal);
+            }
+            if ui
+                .add_enabled(selected_count >= 3, egui::Button::new("Vertical gaps"))
+                .on_hover_text("Distribute with equal vertical gaps")
+                .clicked()
+            {
+                self.distribute_selection(DistributionAxis::Vertical);
+            }
+        });
     }
 
     fn page_inspector(&mut self, ui: &mut egui::Ui) {
@@ -1097,11 +1306,7 @@ impl StudioApp {
                 self.dirty = true;
             }
             if danger_button(ui, "Delete").clicked() {
-                self.template.pages[self.current_page]
-                    .elements
-                    .remove(index);
-                self.selection = Selection::Page;
-                self.dirty = true;
+                self.delete_selection();
             }
         });
     }
@@ -1310,7 +1515,7 @@ impl StudioApp {
                     let snap_threshold = 7.0 / scale;
                     let mut snap_feedback = SnapFeedback::default();
                     for (index, element) in elements.iter().enumerate() {
-                        let selected = self.selection == Selection::Element(index);
+                        let selected = self.is_element_selected(index);
                         let interaction = paint_element(
                             ui,
                             &painter,
@@ -1320,23 +1525,29 @@ impl StudioApp {
                             ElementPaintOptions {
                                 index,
                                 selected,
+                                primary: self.is_primary_element(index),
                                 paint_content: !resolved,
                             },
                         );
                         if interaction.clicked {
-                            self.selection = Selection::Element(index);
+                            let additive = ui.input(|input| input.modifiers.shift);
+                            self.select_element(index, additive);
                         }
                         if let Some(delta) = interaction.translate {
-                            let (mut updated, total_delta) = self.drag_from_origin(
+                            let (mut updated, total_delta, originals) = self.drag_from_origin(
                                 index,
                                 ElementDragKind::Translate,
                                 delta,
                             );
+                            let moving_indices = originals
+                                .iter()
+                                .map(|(selected_index, _)| *selected_index)
+                                .collect::<Vec<_>>();
                             let raw_delta = [total_delta.x / scale, -total_delta.y / scale];
                             let snapped = if snapping_active {
                                 let (x_targets, y_targets) = alignment_targets(
                                     &elements,
-                                    index,
+                                    &moving_indices,
                                     page_width,
                                     page_height,
                                     &visible_guides,
@@ -1364,13 +1575,29 @@ impl StudioApp {
                                     y: None,
                                 }
                             };
-                            translate_element(&mut updated, snapped.delta[0], snapped.delta[1]);
-                            self.template.pages[self.current_page].elements[index] = updated;
+                            if moving_indices.len() > 1 {
+                                for (selected_index, mut original) in originals {
+                                    translate_element(
+                                        &mut original,
+                                        snapped.delta[0],
+                                        snapped.delta[1],
+                                    );
+                                    self.template.pages[self.current_page].elements
+                                        [selected_index] = original;
+                                }
+                            } else {
+                                translate_element(
+                                    &mut updated,
+                                    snapped.delta[0],
+                                    snapped.delta[1],
+                                );
+                                self.template.pages[self.current_page].elements[index] = updated;
+                            }
                             snap_feedback = snapped.into();
                             self.dirty = true;
                         }
                         if let Some(delta) = interaction.resize {
-                            let (mut updated, total_delta) =
+                            let (mut updated, total_delta, _) =
                                 self.drag_from_origin(index, ElementDragKind::Resize, delta);
                             let original_bounds = element_bounds(&updated).map(bounds_points);
                             let raw_delta = [total_delta.x / scale, total_delta.y / scale];
@@ -1379,7 +1606,7 @@ impl StudioApp {
                             {
                                 let (x_targets, y_targets) = alignment_targets(
                                     &elements,
-                                    index,
+                                    &[index],
                                     page_width,
                                     page_height,
                                     &visible_guides,
@@ -1419,7 +1646,7 @@ impl StudioApp {
                             self.dirty = true;
                         }
                         if let Some((endpoint, delta)) = interaction.line_endpoint {
-                            let (mut updated, total_delta) = self.drag_from_origin(
+                            let (mut updated, total_delta, _) = self.drag_from_origin(
                                 index,
                                 ElementDragKind::LineEndpoint(endpoint),
                                 delta,
@@ -1428,7 +1655,7 @@ impl StudioApp {
                             let snapped = if snapping_active {
                                 let (x_targets, y_targets) = alignment_targets(
                                     &elements,
-                                    index,
+                                    &[index],
                                     page_width,
                                     page_height,
                                     &visible_guides,
@@ -1672,32 +1899,59 @@ impl StudioApp {
             self.open_project();
         }
         if duplicate && !ctx.wants_keyboard_input() {
-            if let Selection::Element(index) = self.selection {
-                if let Some(element) = self.template.pages[self.current_page]
-                    .elements
-                    .get(index)
-                    .cloned()
-                {
-                    self.template.pages[self.current_page]
-                        .elements
-                        .insert(index + 1, element);
-                    self.selection = Selection::Element(index + 1);
-                    self.dirty = true;
-                }
-            }
+            self.duplicate_selection();
         }
         if delete && !ctx.wants_keyboard_input() {
-            if let Selection::Element(index) = self.selection {
-                if index < self.template.pages[self.current_page].elements.len() {
-                    self.template.pages[self.current_page]
-                        .elements
-                        .remove(index);
-                    self.selection = Selection::Page;
-                    self.dirty = true;
-                }
-            }
+            self.delete_selection();
         }
         if !ctx.wants_keyboard_input() {
+            let (select_all, clear_selection, nudge) = ctx.input(|input| {
+                let amount = if input.modifiers.shift { 10.0 } else { 1.0 };
+                let nudge = if input.key_pressed(Key::ArrowLeft) {
+                    Some((-amount, 0.0))
+                } else if input.key_pressed(Key::ArrowRight) {
+                    Some((amount, 0.0))
+                } else if input.key_pressed(Key::ArrowUp) {
+                    Some((0.0, amount))
+                } else if input.key_pressed(Key::ArrowDown) {
+                    Some((0.0, -amount))
+                } else {
+                    None
+                };
+                (
+                    input.modifiers.command && input.key_pressed(Key::A),
+                    input.key_pressed(Key::Escape),
+                    nudge,
+                )
+            });
+            if select_all {
+                let indices = (0..self.template.pages[self.current_page].elements.len())
+                    .collect::<BTreeSet<_>>();
+                self.selection = match indices.len() {
+                    0 => Selection::Page,
+                    1 => Selection::Element(0),
+                    _ => Selection::Elements {
+                        indices,
+                        primary: 0,
+                    },
+                };
+            }
+            if clear_selection {
+                self.selection = Selection::Page;
+                self.active_drag = None;
+            }
+            if let Some((dx, dy)) = nudge {
+                let indices = self.selected_element_indices();
+                for index in indices {
+                    if let Some(element) = self.template.pages[self.current_page]
+                        .elements
+                        .get_mut(index)
+                    {
+                        translate_element(element, dx, dy);
+                        self.dirty = true;
+                    }
+                }
+            }
             if toggle_guides {
                 self.show_guides = !self.show_guides;
             }
@@ -1936,6 +2190,7 @@ struct ElementInteraction {
 struct ElementPaintOptions {
     index: usize,
     selected: bool,
+    primary: bool,
     paint_content: bool,
 }
 
@@ -2650,6 +2905,8 @@ fn paint_element(
                 Stroke::new(1.5_f32, ORANGE),
                 StrokeKind::Outside,
             );
+        }
+        if options.primary {
             for (endpoint, center) in [(LineEndpoint::Start, start), (LineEndpoint::End, end)] {
                 let handle = Rect::from_center_size(center, Vec2::splat(12.0));
                 painter.rect_filled(handle, CornerRadius::same(2), Color32::WHITE);
@@ -2716,6 +2973,8 @@ fn paint_element(
             LineDash::Solid,
             transform,
         );
+    }
+    if options.primary {
         let resize_center = transform.point(rect.right_top());
         let handle = Rect::from_center_size(resize_center, Vec2::splat(12.0));
         painter.rect_filled(handle, CornerRadius::same(2), ORANGE);
@@ -2969,7 +3228,7 @@ fn paint_barcode_placeholder(
 
 fn alignment_targets(
     elements: &[Element],
-    moving_index: usize,
+    excluded_indices: &[usize],
     page_width: f32,
     page_height: f32,
     guides: &[EditorGuide],
@@ -2983,7 +3242,7 @@ fn alignment_targets(
         }
     }
     for (index, element) in elements.iter().enumerate() {
-        if index == moving_index {
+        if excluded_indices.contains(&index) {
             continue;
         }
         if let Some(bounds) = element_alignment_bounds(element) {
@@ -3974,7 +4233,7 @@ mod tests {
         };
         push_editor_guide(&mut guides, guide);
         push_editor_guide(&mut guides, guide);
-        let (x_targets, y_targets) = alignment_targets(&elements, 0, 612.0, 792.0, &guides);
+        let (x_targets, y_targets) = alignment_targets(&elements, &[0], 612.0, 792.0, &guides);
 
         assert_eq!(guides, [guide]);
         assert!(x_targets.contains(&100.0));
@@ -3991,6 +4250,7 @@ mod tests {
             index: 0,
             kind: ElementDragKind::Translate,
             original: original.clone(),
+            originals: vec![(0, original.clone())],
             accumulated: Vec2::ZERO,
         };
 

@@ -58,6 +58,11 @@ inspection.
 
 `Cmd/Ctrl+Z` undoes an edit and `Cmd/Ctrl+Shift+Z` redoes it. Canvas gestures
 and inspector typing sessions are coalesced into single history steps.
+Shift-click selects multiple layers from the canvas or Layers panel. The
+multi-selection inspector aligns visible edges and centers, distributes equal
+horizontal or vertical gaps, and performs bulk duplicate or delete operations.
+Dragging or using the arrow keys moves the selection together; Shift+Arrow
+nudges by 10pt, `Cmd/Ctrl+A` selects every layer, and Escape clears selection.
 
 Imported tables, groups, stacks, and repeaters remain editable through the JSON
 view while their dedicated visual inspectors are developed.
@@ -365,8 +370,7 @@ The roadmap below contains only unfinished work. Priorities favor a dependable
 ### P0 — Ship a usable 0.1 release
 
 - [ ] Make Print Forge Studio a supported no-code authoring path: add visual
-      inspectors for every MVP element, explicit alignment and
-      distribution commands, asset/font management, representative data-row
+      inspectors for every MVP element, asset/font management, representative data-row
       selection, and an exact PDF-rasterized typography preview; then include
       the desktop app in release packaging.
 - [ ] Generate and publish a versioned JSON Schema plus a human-readable

@@ -30,6 +30,22 @@ pub enum LayerMove {
     Front,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AlignMode {
+    Left,
+    HorizontalCenter,
+    Right,
+    Bottom,
+    VerticalCenter,
+    Top,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DistributionAxis {
+    Horizontal,
+    Vertical,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SnapResult {
     pub delta: [f32; 2],
@@ -348,6 +364,95 @@ pub fn reorder_element(elements: &mut Vec<Element>, index: usize, movement: Laye
     target
 }
 
+pub fn align_elements(elements: &mut [Element], indices: &[usize], mode: AlignMode) -> bool {
+    let items = selected_alignment_bounds(elements, indices);
+    if items.len() < 2 {
+        return false;
+    }
+    let left = items
+        .iter()
+        .map(|(_, bounds)| bounds[0])
+        .fold(f32::INFINITY, f32::min);
+    let right = items
+        .iter()
+        .map(|(_, bounds)| bounds[0] + bounds[2])
+        .fold(f32::NEG_INFINITY, f32::max);
+    let bottom = items
+        .iter()
+        .map(|(_, bounds)| bounds[1])
+        .fold(f32::INFINITY, f32::min);
+    let top = items
+        .iter()
+        .map(|(_, bounds)| bounds[1] + bounds[3])
+        .fold(f32::NEG_INFINITY, f32::max);
+    let horizontal_center = (left + right) / 2.0;
+    let vertical_center = (bottom + top) / 2.0;
+
+    for (index, bounds) in items {
+        let (dx, dy) = match mode {
+            AlignMode::Left => (left - bounds[0], 0.0),
+            AlignMode::HorizontalCenter => (horizontal_center - (bounds[0] + bounds[2] / 2.0), 0.0),
+            AlignMode::Right => (right - (bounds[0] + bounds[2]), 0.0),
+            AlignMode::Bottom => (0.0, bottom - bounds[1]),
+            AlignMode::VerticalCenter => (0.0, vertical_center - (bounds[1] + bounds[3] / 2.0)),
+            AlignMode::Top => (0.0, top - (bounds[1] + bounds[3])),
+        };
+        translate_element(&mut elements[index], dx, dy);
+    }
+    true
+}
+
+pub fn distribute_elements(
+    elements: &mut [Element],
+    indices: &[usize],
+    axis: DistributionAxis,
+) -> bool {
+    let mut items = selected_alignment_bounds(elements, indices);
+    if items.len() < 3 {
+        return false;
+    }
+    match axis {
+        DistributionAxis::Horizontal => {
+            items.sort_by(|left, right| left.1[0].total_cmp(&right.1[0]));
+            let outer_start = items.first().unwrap().1[0];
+            let outer_end = items.last().unwrap().1[0] + items.last().unwrap().1[2];
+            let occupied = items.iter().map(|(_, bounds)| bounds[2]).sum::<f32>();
+            let gap = (outer_end - outer_start - occupied) / (items.len() - 1) as f32;
+            let mut cursor = outer_start;
+            for (index, bounds) in items {
+                translate_element(&mut elements[index], cursor - bounds[0], 0.0);
+                cursor += bounds[2] + gap;
+            }
+        }
+        DistributionAxis::Vertical => {
+            items.sort_by(|left, right| left.1[1].total_cmp(&right.1[1]));
+            let outer_start = items.first().unwrap().1[1];
+            let outer_end = items.last().unwrap().1[1] + items.last().unwrap().1[3];
+            let occupied = items.iter().map(|(_, bounds)| bounds[3]).sum::<f32>();
+            let gap = (outer_end - outer_start - occupied) / (items.len() - 1) as f32;
+            let mut cursor = outer_start;
+            for (index, bounds) in items {
+                translate_element(&mut elements[index], 0.0, cursor - bounds[1]);
+                cursor += bounds[3] + gap;
+            }
+        }
+    }
+    true
+}
+
+fn selected_alignment_bounds(elements: &[Element], indices: &[usize]) -> Vec<(usize, [f32; 4])> {
+    indices
+        .iter()
+        .copied()
+        .filter_map(|index| {
+            elements
+                .get(index)
+                .and_then(element_alignment_bounds)
+                .map(|bounds| (index, bounds))
+        })
+        .collect()
+}
+
 pub fn snap_translation(
     bounds: [f32; 4],
     delta: [f32; 2],
@@ -483,10 +588,10 @@ mod tests {
     use print_forge_validation::validate_template;
 
     use super::{
-        ElementKind, LayerMove, LineEndpoint, bounds_points, element_alignment_bounds,
-        element_bounds, element_rotation, new_element, reorder_element, set_element_rotation,
-        snap_point, snap_size, snap_translation, starter_template, translate_element,
-        translate_line_endpoint,
+        AlignMode, DistributionAxis, ElementKind, LayerMove, LineEndpoint, align_elements,
+        bounds_points, distribute_elements, element_alignment_bounds, element_bounds,
+        element_rotation, new_element, reorder_element, set_element_rotation, snap_point,
+        snap_size, snap_translation, starter_template, translate_element, translate_line_endpoint,
     };
 
     #[test]
@@ -547,6 +652,46 @@ mod tests {
         let selected = reorder_element(&mut elements, selected, LayerMove::Backward);
         assert_eq!(selected, 1);
         assert!(matches!(elements[1], Element::Text(_)));
+    }
+
+    #[test]
+    fn selected_elements_align_by_their_visible_bounds() {
+        let mut elements = vec![
+            new_element(ElementKind::Rectangle, 0.0),
+            new_element(ElementKind::Rectangle, 20.0),
+        ];
+
+        assert!(align_elements(&mut elements, &[0, 1], AlignMode::Left));
+        let first = element_alignment_bounds(&elements[0]).unwrap();
+        let second = element_alignment_bounds(&elements[1]).unwrap();
+        assert!((first[0] - second[0]).abs() < 0.001);
+
+        assert!(align_elements(&mut elements, &[0, 1], AlignMode::Top));
+        let first = element_alignment_bounds(&elements[0]).unwrap();
+        let second = element_alignment_bounds(&elements[1]).unwrap();
+        assert!((first[1] + first[3] - second[1] - second[3]).abs() < 0.001);
+    }
+
+    #[test]
+    fn selected_elements_distribute_with_equal_gaps() {
+        let mut elements = vec![
+            new_element(ElementKind::Rectangle, 0.0),
+            new_element(ElementKind::Rectangle, 40.0),
+            new_element(ElementKind::Rectangle, 100.0),
+        ];
+
+        assert!(distribute_elements(
+            &mut elements,
+            &[0, 1, 2],
+            DistributionAxis::Horizontal
+        ));
+        let bounds = elements
+            .iter()
+            .map(|element| element_alignment_bounds(element).unwrap())
+            .collect::<Vec<_>>();
+        let first_gap = bounds[1][0] - (bounds[0][0] + bounds[0][2]);
+        let second_gap = bounds[2][0] - (bounds[1][0] + bounds[1][2]);
+        assert!((first_gap - second_gap).abs() < 0.001);
     }
 
     #[test]
