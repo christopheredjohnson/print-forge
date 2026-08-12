@@ -45,7 +45,7 @@
             "width": { "value": 120, "unit": "points" },
             "height": { "value": 120, "unit": "points" }
           },
-          "source": "assets/vectors/forge-mark.svg",
+          "source": "assets/images/forge-mark.svg",
           "fit": "contain"
         },
         {

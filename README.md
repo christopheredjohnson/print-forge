@@ -142,24 +142,24 @@ cargo run -- --help
 cargo run -- render --help
 
 # Validate inputs or inspect a dataset.
-cargo run -- validate examples/business-card.json --dataset examples/people.csv
-cargo run -- inspect-data examples/people.csv
+cargo run -- validate examples/business-card --dataset examples/business-card/data.csv
+cargo run -- inspect-data examples/business-card/data.csv
 
 # Get automation-safe output or reject every warning.
-cargo run -- --json validate examples/business-card.json --dataset examples/people.csv
-cargo run -- --warnings deny validate examples/business-card.json
+cargo run -- --json validate examples/business-card --dataset examples/business-card/data.csv
+cargo run -- --warnings deny validate examples/business-card
 
 # Render every row into one combined PDF.
-cargo run -- render examples/business-card.json examples/people.csv \
+cargo run -- render examples/business-card examples/business-card/data.csv \
   output/pdf/business-cards.pdf \
   --summary output/jobs/business-cards.json
 
 # Exercise the complete job without creating PDFs or summaries.
-cargo run -- --json render examples/business-card.json examples/people.csv \
+cargo run -- --json render examples/business-card examples/business-card/data.csv \
   output/pdf/business-cards.pdf --dry-run
 
 # Render selected rows into separate, safely named PDFs.
-cargo run -- render examples/business-card.json examples/people.csv \
+cargo run -- render examples/business-card examples/business-card/data.csv \
   output/pdf/business-cards \
   --output-mode separate \
   --output-name '{{last_name}}-{{first_name}}' \
@@ -167,42 +167,43 @@ cargo run -- render examples/business-card.json examples/people.csv \
   --continue-on-error
 
 # Apply the complete print-ready preset.
-cargo run -- render examples/business-card.json examples/people.csv \
+cargo run -- render examples/business-card examples/business-card/data.csv \
   output/pdf/business-cards-print-ready.pdf \
   --print-ready
 
 # Render the flow-layout and pagination fixture.
-cargo run -- render examples/flow-layout.json examples/flow-layout-data.json \
+cargo run -- render examples/flow-layout examples/flow-layout/data.json \
   output/pdf/flow-layout.pdf
 
 # Render the paginated invoice-table fixture.
-cargo run -- render examples/table-invoice.json examples/table-invoice-data.json \
+cargo run -- render examples/table-invoice examples/table-invoice/data.json \
   output/pdf/table-invoice.pdf
 
 # Render a print-ready three-column flight checklist.
 # Its six checklist sections and multiline notes are populated from the data JSON.
-cargo run -- render examples/flight-checklist.json \
-  examples/flight-checklist-data.json \
+cargo run -- render examples/flight-checklist \
+  examples/flight-checklist/data.json \
   output/pdf/flight-checklist.pdf \
   --print-ready
 
 # Render vector SVG, QR, and Code 128 specialty elements.
-cargo run -- render examples/specialty-elements.json \
-  examples/specialty-elements-data.json \
+cargo run -- render examples/specialty-elements \
+  examples/specialty-elements/data.json \
   output/pdf/specialty-elements.pdf
 
 # Render reusable groups as a repeated label grid.
-cargo run -- render examples/label-sheet.json examples/label-sheet-data.json \
+cargo run -- render examples/label-sheet examples/label-sheet/data.json \
   output/pdf/label-sheet.pdf
 
 # Render a nested product array as a paginated catalog.
-cargo run -- render examples/product-catalog.json examples/product-catalog-data.json \
+cargo run -- render examples/product-catalog examples/product-catalog/data.json \
   output/pdf/product-catalog.pdf
 ```
 
 The flight checklist reads its palette from the nested `theme` object in the data JSON. The
 default dataset uses **Spruce Ledger**; ready-to-render **Harbor Blue**, **Cider Note**, and
-**Mulberry Ink** presets are available in `examples/flight-checklist-data-{harbor,cider,mulberry}.json`.
+**Mulberry Ink** presets are available in
+`examples/flight-checklist/data-{harbor,cider,mulberry}.json`.
 Copy a preset's `theme` object into your checklist data to change its appearance without editing
 the template.
 

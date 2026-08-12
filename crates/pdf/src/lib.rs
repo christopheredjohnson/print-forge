@@ -729,21 +729,20 @@ fn pdf_font(
 
 fn bundled_font(name: &str) -> Option<(&'static str, &'static [u8])> {
     match name.to_ascii_lowercase().as_str() {
-        "helvetica" | "sans-serif" => Some((
-            "helvetica",
-            include_bytes!("../../../examples/assets/fonts/Helvetica.ttf"),
-        )),
+        "helvetica" | "sans-serif" => {
+            Some(("helvetica", include_bytes!("../assets/fonts/Helvetica.ttf")))
+        }
         "helvetica-bold" => Some((
             "helvetica-bold",
-            include_bytes!("../../../examples/assets/fonts/Helvetica-Bold.ttf"),
+            include_bytes!("../assets/fonts/Helvetica-Bold.ttf"),
         )),
         "helvetica-oblique" => Some((
             "helvetica-oblique",
-            include_bytes!("../../../examples/assets/fonts/Helvetica-Oblique.ttf"),
+            include_bytes!("../assets/fonts/Helvetica-Oblique.ttf"),
         )),
         "helvetica-bold-oblique" => Some((
             "helvetica-bold-oblique",
-            include_bytes!("../../../examples/assets/fonts/Helvetica-BoldOblique.ttf"),
+            include_bytes!("../assets/fonts/Helvetica-BoldOblique.ttf"),
         )),
         _ => None,
     }
@@ -1173,30 +1172,35 @@ mod tests {
     };
 
     fn print_ready_fixture() -> ResolvedDocument {
-        let template: Template =
-            serde_json::from_str(include_str!("../../../examples/business-card.json")).unwrap();
+        let template: Template = serde_json::from_str(include_str!(
+            "../../../examples/business-card/template.json"
+        ))
+        .unwrap();
         let row = serde_json::from_value(json!({
             "first_name": "Ada",
             "last_name": "Lovelace",
             "title": "Engineer"
         }))
         .unwrap();
-        let asset_base = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples");
+        let asset_base =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/business-card");
         BasicLayoutEngine
             .layout_with_options(&template, &row, &LayoutOptions { asset_base })
             .unwrap()
     }
 
     fn specialty_fixture() -> ResolvedDocument {
-        let template: Template =
-            serde_json::from_str(include_str!("../../../examples/specialty-elements.json"))
-                .unwrap();
+        let template: Template = serde_json::from_str(include_str!(
+            "../../../examples/specialty-elements/template.json"
+        ))
+        .unwrap();
         let rows = serde_json::from_str::<Vec<serde_json::Value>>(include_str!(
-            "../../../examples/specialty-elements-data.json"
+            "../../../examples/specialty-elements/data.json"
         ))
         .unwrap();
         let row = rows[0].as_object().unwrap().clone();
-        let asset_base = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples");
+        let asset_base =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/specialty-elements");
         BasicLayoutEngine
             .layout_with_options(&template, &row, &LayoutOptions { asset_base })
             .unwrap()
@@ -1432,7 +1436,7 @@ mod tests {
     fn image_preflight_rejects_effective_dpi_below_the_configured_minimum() {
         let mut document = print_ready_fixture();
         let image = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../examples/assets/images/layout-fixture.png");
+            .join("../../examples/absolute-layout/assets/images/layout-fixture.png");
         document.pages[0].commands.push(ResolvedCommand {
             source_path: "pages[0].elements[3]".to_owned(),
             rotation: 0.0,

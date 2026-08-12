@@ -5,15 +5,17 @@ use print_forge_template::Template;
 use serde_json::{Map, Value};
 
 fn main() {
-    let template: Template =
-        serde_json::from_str(include_str!("../../../examples/table-invoice.json")).unwrap();
+    let template: Template = serde_json::from_str(include_str!(
+        "../../../examples/table-invoice/template.json"
+    ))
+    .unwrap();
     let seed: Vec<Map<String, Value>> =
-        serde_json::from_str(include_str!("../../../examples/table-invoice-data.json")).unwrap();
+        serde_json::from_str(include_str!("../../../examples/table-invoice/data.json")).unwrap();
     let mut data = seed[0].clone();
     let row = data["items"].as_array().unwrap()[0].clone();
     data.insert("items".to_owned(), Value::Array(vec![row; 1_000]));
     let options = LayoutOptions {
-        asset_base: PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples"),
+        asset_base: PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/table-invoice"),
     };
 
     let started = Instant::now();

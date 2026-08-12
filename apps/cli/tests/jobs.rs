@@ -282,8 +282,8 @@ fn continue_on_error_produces_partial_combined_output_and_failure_summary() {
 fn print_ready_mode_generates_valid_pdf_x_with_bleed_and_trim_boxes() {
     let directory = TestDir::new("print-ready-job");
     let examples = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples");
-    let template = examples.join("business-card.json");
-    let dataset = examples.join("people.csv");
+    let template = examples.join("business-card");
+    let dataset = template.join("data.csv");
     let pdf = directory.path().join("print-ready.pdf");
     let output = run(&[
         "render",
@@ -312,8 +312,8 @@ fn print_ready_mode_generates_valid_pdf_x_with_bleed_and_trim_boxes() {
 fn flow_layout_fixture_renders_explicit_and_automatic_continuation_pages() {
     let directory = TestDir::new("flow-layout-job");
     let examples = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples");
-    let template = examples.join("flow-layout.json");
-    let dataset = examples.join("flow-layout-data.json");
+    let template = examples.join("flow-layout");
+    let dataset = template.join("data.json");
     let pdf = directory.path().join("flow-layout.pdf");
     let output = run(&[
         "render",
@@ -335,8 +335,8 @@ fn flow_layout_fixture_renders_explicit_and_automatic_continuation_pages() {
 fn mvp_table_fixture_wraps_rows_and_paginates() {
     let directory = TestDir::new("table-job");
     let examples = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples");
-    let template = examples.join("table-invoice.json");
-    let dataset = examples.join("table-invoice-data.json");
+    let template = examples.join("table-invoice");
+    let dataset = template.join("data.json");
     let pdf = directory.path().join("table-invoice.pdf");
     let output = run(&[
         "render",
@@ -358,14 +358,14 @@ fn mvp_table_fixture_wraps_rows_and_paginates() {
 fn flight_checklist_theme_fixtures_render_as_one_print_ready_page() {
     let directory = TestDir::new("flight-checklist-job");
     let examples = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples");
-    let template = examples.join("flight-checklist.json");
+    let template = examples.join("flight-checklist");
     for dataset_name in [
-        "flight-checklist-data.json",
-        "flight-checklist-data-harbor.json",
-        "flight-checklist-data-cider.json",
-        "flight-checklist-data-mulberry.json",
+        "data.json",
+        "data-harbor.json",
+        "data-cider.json",
+        "data-mulberry.json",
     ] {
-        let dataset = examples.join(dataset_name);
+        let dataset = template.join(dataset_name);
         let pdf = directory.path().join(format!("{dataset_name}.pdf"));
         let output = run(&[
             "render",
@@ -400,8 +400,8 @@ fn flight_checklist_theme_fixtures_render_as_one_print_ready_page() {
 fn specialty_fixture_renders_vector_svg_qr_and_code128() {
     let directory = TestDir::new("specialty-job");
     let examples = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples");
-    let template = examples.join("specialty-elements.json");
-    let dataset = examples.join("specialty-elements-data.json");
+    let template = examples.join("specialty-elements");
+    let dataset = template.join("data.json");
     let pdf = directory.path().join("specialty-elements.pdf");
     let output = run(&[
         "render",
@@ -427,22 +427,12 @@ fn specialty_fixture_renders_vector_svg_qr_and_code128() {
 fn composition_fixtures_render_repeated_labels_and_catalog_pages() {
     let directory = TestDir::new("composition-job");
     let examples = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples");
-    for (template_name, dataset_name, output_name, expected_pages) in [
-        (
-            "label-sheet.json",
-            "label-sheet-data.json",
-            "label-sheet.pdf",
-            1,
-        ),
-        (
-            "product-catalog.json",
-            "product-catalog-data.json",
-            "product-catalog.pdf",
-            2,
-        ),
+    for (project_name, output_name, expected_pages) in [
+        ("label-sheet", "label-sheet.pdf", 1),
+        ("product-catalog", "product-catalog.pdf", 2),
     ] {
-        let template = examples.join(template_name);
-        let dataset = examples.join(dataset_name);
+        let template = examples.join(project_name);
+        let dataset = template.join("data.json");
         let pdf = directory.path().join(output_name);
         let output = run(&[
             "render",
@@ -454,9 +444,9 @@ fn composition_fixtures_render_repeated_labels_and_catalog_pages() {
         assert!(
             output.status.success(),
             "{}: {}",
-            template_name,
+            project_name,
             String::from_utf8_lossy(&output.stderr)
         );
-        assert_eq!(page_count(&pdf), expected_pages, "{template_name}");
+        assert_eq!(page_count(&pdf), expected_pages, "{project_name}");
     }
 }

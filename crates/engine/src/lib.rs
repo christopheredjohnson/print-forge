@@ -2826,13 +2826,16 @@ mod tests {
 
     #[test]
     fn resolves_fixture_assets_from_the_template_directory() {
-        let template: Template =
-            serde_json::from_str(include_str!("../../../examples/absolute-layout.json")).unwrap();
+        let template: Template = serde_json::from_str(include_str!(
+            "../../../examples/absolute-layout/template.json"
+        ))
+        .unwrap();
         let data: DataRow = serde_json::from_value(json!({
             "shrink_text": "A sentence that shrinks"
         }))
         .unwrap();
-        let asset_base = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples");
+        let asset_base =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/absolute-layout");
         let document = BasicLayoutEngine
             .layout_with_options(&template, &data, &LayoutOptions { asset_base })
             .unwrap();
@@ -2843,7 +2846,7 @@ mod tests {
         assert!(
             image
                 .source
-                .ends_with("examples/assets/images/layout-fixture.png")
+                .ends_with("examples/absolute-layout/assets/images/layout-fixture.png")
         );
     }
 
@@ -3427,14 +3430,17 @@ mod tests {
 
     #[test]
     fn product_catalog_continuation_retains_composition_and_page_furniture() {
-        let template: Template =
-            serde_json::from_str(include_str!("../../../examples/product-catalog.json")).unwrap();
+        let template: Template = serde_json::from_str(include_str!(
+            "../../../examples/product-catalog/template.json"
+        ))
+        .unwrap();
         let rows = serde_json::from_str::<Vec<serde_json::Value>>(include_str!(
-            "../../../examples/product-catalog-data.json"
+            "../../../examples/product-catalog/data.json"
         ))
         .unwrap();
         let data = rows[0].as_object().unwrap().clone();
-        let asset_base = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples");
+        let asset_base =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/product-catalog");
 
         let document = BasicLayoutEngine
             .layout_with_options(&template, &data, &LayoutOptions { asset_base })

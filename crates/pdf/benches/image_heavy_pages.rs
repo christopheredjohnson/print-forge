@@ -6,12 +6,15 @@ use print_forge_template::Template;
 use serde_json::{Map, Value};
 
 fn main() {
-    let template: Template =
-        serde_json::from_str(include_str!("../../../examples/absolute-layout.json")).unwrap();
+    let template: Template = serde_json::from_str(include_str!(
+        "../../../examples/absolute-layout/template.json"
+    ))
+    .unwrap();
     let rows: Vec<Map<String, Value>> =
-        serde_json::from_str(include_str!("../../../examples/absolute-layout-data.json")).unwrap();
+        serde_json::from_str(include_str!("../../../examples/absolute-layout/data.json")).unwrap();
     let options = LayoutOptions {
-        asset_base: PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples"),
+        asset_base: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../examples/absolute-layout"),
     };
     let mut document = BasicLayoutEngine
         .layout_with_options(&template, &rows[0], &options)

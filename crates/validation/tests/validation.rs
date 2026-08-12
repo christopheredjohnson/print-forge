@@ -8,11 +8,14 @@ fn template(json: &str) -> Template {
 
 #[test]
 fn accepts_the_business_card_fixture() {
-    let template: Template =
-        serde_json::from_str(include_str!("../../../examples/business-card.json")).unwrap();
-    let dataset =
-        Dataset::from_csv_reader(include_bytes!("../../../examples/people.csv").as_slice())
-            .unwrap();
+    let template: Template = serde_json::from_str(include_str!(
+        "../../../examples/business-card/template.json"
+    ))
+    .unwrap();
+    let dataset = Dataset::from_csv_reader(
+        include_bytes!("../../../examples/business-card/data.csv").as_slice(),
+    )
+    .unwrap();
 
     let report = validate_job(&template, &dataset);
 
@@ -22,11 +25,14 @@ fn accepts_the_business_card_fixture() {
 
 #[test]
 fn rejects_the_invalid_csv_fixture_with_exact_row_paths() {
-    let template: Template =
-        serde_json::from_str(include_str!("../../../examples/business-card.json")).unwrap();
-    let dataset =
-        Dataset::from_csv_reader(include_bytes!("../../../examples/invalid-people.csv").as_slice())
-            .unwrap();
+    let template: Template = serde_json::from_str(include_str!(
+        "../../../examples/business-card/template.json"
+    ))
+    .unwrap();
+    let dataset = Dataset::from_csv_reader(
+        include_bytes!("../../../examples/business-card/invalid-data.csv").as_slice(),
+    )
+    .unwrap();
 
     let report = validate_job(&template, &dataset);
     let paths: Vec<_> = report
@@ -137,8 +143,10 @@ fn rejects_invalid_element_dimensions_and_table_widths() {
 
 #[test]
 fn rejects_non_finite_element_rotation() {
-    let mut invalid: Template =
-        serde_json::from_str(include_str!("../../../examples/business-card.json")).unwrap();
+    let mut invalid: Template = serde_json::from_str(include_str!(
+        "../../../examples/business-card/template.json"
+    ))
+    .unwrap();
     let print_forge_template::Element::Text(text) = &mut invalid.pages[0].elements[0] else {
         panic!("fixture should start with text");
     };
@@ -389,10 +397,12 @@ fn rejects_invalid_flow_layout_contracts() {
 
 #[test]
 fn validates_specialty_element_scan_constraints() {
-    let valid_template: Template =
-        serde_json::from_str(include_str!("../../../examples/specialty-elements.json")).unwrap();
+    let valid_template: Template = serde_json::from_str(include_str!(
+        "../../../examples/specialty-elements/template.json"
+    ))
+    .unwrap();
     let dataset = Dataset::from_json_reader(
-        include_bytes!("../../../examples/specialty-elements-data.json").as_slice(),
+        include_bytes!("../../../examples/specialty-elements/data.json").as_slice(),
     )
     .unwrap();
     assert!(validate_job(&valid_template, &dataset).is_valid());

@@ -167,7 +167,7 @@ pub fn new_element(kind: ElementKind, offset: f32) -> Element {
             visible: true,
             locked: false,
             position: Some(bounds(x, y, 144.0, 144.0)),
-            source: "assets/vectors/example.svg".to_owned(),
+            source: "assets/images/example.svg".to_owned(),
             fit: ImageFit::Contain,
             rotation: 0.0,
         }),
