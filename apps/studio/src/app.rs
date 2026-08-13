@@ -526,8 +526,9 @@ impl StudioApp {
                 .and_then(Path::parent)
                 .map(Path::to_owned)
                 .or_else(|| std::env::current_dir().ok());
-            let mut dialog =
-                FileDialog::new().set_title("Choose or create the Print Forge project folder");
+            let mut dialog = FileDialog::new().set_title(
+                "Choose where to save the Print Forge project (not a system Fonts folder)",
+            );
             if let Some(initial_directory) = initial_directory {
                 dialog = dialog.set_directory(initial_directory);
             }
@@ -798,22 +799,11 @@ impl StudioApp {
             return;
         };
         let family_name = family.name.clone();
-        if self.project_root().is_none()
-            && !matches!(
-                MessageDialog::new()
-                    .set_level(MessageLevel::Info)
-                    .set_title("Save a project before adding fonts")
-                    .set_description(format!(
-                        "Print Forge will copy the available {family_name} font files into the project's assets/fonts folder so previews and exported PDFs stay portable. Choose or create the project folder now?"
-                    ))
-                    .set_buttons(MessageButtons::OkCancel)
-                    .show(),
-                MessageDialogResult::Ok
-            )
-        {
-            return;
-        }
-        let Some(project_root) = self.ensure_project_root() else {
+        let Some(project_root) = self.project_root() else {
+            self.set_notice(
+                NoticeKind::Info,
+                "Save the document as a Print Forge project before adding system fonts",
+            );
             return;
         };
         let faces = self
@@ -2481,6 +2471,8 @@ impl StudioApp {
         }
         let mut open = self.show_system_fonts;
         let mut export_family = None;
+        let mut save_project_requested = false;
+        let project_ready = self.project_root().is_some();
         egui::Window::new("System fonts")
             .open(&mut open)
             .default_width(660.0)
@@ -2497,6 +2489,26 @@ impl StudioApp {
                     .color(Color32::from_rgb(226, 174, 105))
                     .small(),
                 );
+                if !project_ready {
+                    ui.add_space(8.0);
+                    Frame::group(ui.style())
+                        .fill(Color32::from_rgb(48, 42, 31))
+                        .stroke(Stroke::new(1.0_f32, Color32::from_rgb(184, 135, 63)))
+                        .inner_margin(Margin::same(10))
+                        .show(ui, |ui| {
+                            ui.label(
+                                RichText::new("Save this document as a project first")
+                                    .strong()
+                                    .color(Color32::from_rgb(242, 198, 116)),
+                            );
+                            ui.label(
+                                "Studio has already discovered the installed fonts below. Choose your document's project folder—not the macOS Fonts folder—so selected font files can be copied into assets/fonts.",
+                            );
+                            if ui.button("Save Print Forge project…").clicked() {
+                                save_project_requested = true;
+                            }
+                        });
+                }
                 ui.add_space(8.0);
                 ui.add(
                     egui::TextEdit::singleline(&mut self.system_font_search)
@@ -2575,9 +2587,16 @@ impl StudioApp {
                                 "Add family to project"
                             };
                             if ui
-                                .add_enabled(regular_is_exportable, egui::Button::new(label))
+                                .add_enabled(
+                                    project_ready && regular_is_exportable,
+                                    egui::Button::new(label),
+                                )
                                 .on_disabled_hover_text(
-                                    "The regular face does not allow outline embedding",
+                                    if project_ready {
+                                        "The regular face does not allow outline embedding"
+                                    } else {
+                                        "Save this document as a Print Forge project first"
+                                    },
                                 )
                                 .clicked()
                             {
@@ -2592,6 +2611,9 @@ impl StudioApp {
                 });
             });
         self.show_system_fonts = open;
+        if save_project_requested {
+            self.save_project(true);
+        }
         if let Some(index) = export_family {
             self.export_system_font_family(index);
         }
