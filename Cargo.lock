@@ -2683,6 +2683,7 @@ name = "print-forge-studio"
 version = "0.1.0"
 dependencies = [
  "eframe",
+ "fontdb",
  "image",
  "print-forge-dataset",
  "print-forge-engine",

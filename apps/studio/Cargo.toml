@@ -11,6 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 eframe.workspace = true
+fontdb.workspace = true
 image.workspace = true
 print-forge-dataset.workspace = true
 print-forge-engine.workspace = true

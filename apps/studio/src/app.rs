@@ -12,6 +12,7 @@ use eframe::egui::{
     FontFamily as EguiFontFamily, FontId, Frame, Id, Key, Layout, Margin, Pos2, Rect, RichText,
     ScrollArea, Sense, Stroke, StrokeKind, TextureHandle, TextureOptions, Vec2,
 };
+use fontdb::{Database as FontDatabase, Family as SystemFontFamily, Query as FontQuery};
 use print_forge_dataset::DataRow;
 use print_forge_engine::{
     BasicLayoutEngine, DrawCommand, ElementLayoutError, LayoutError, LayoutOptions, LineDash,
@@ -201,6 +202,13 @@ struct ResolvedPreview {
 }
 
 #[derive(Clone)]
+struct SystemPreviewFont {
+    name: &'static str,
+    bytes: Vec<u8>,
+    face_index: u32,
+}
+
+#[derive(Clone)]
 struct EditSnapshot {
     template: Template,
     guides: Vec<Vec<EditorGuide>>,
@@ -319,6 +327,7 @@ pub struct StudioApp {
     canvas_mode: CanvasMode,
     preview_page: usize,
     asset_cache: AssetCache,
+    system_preview_fonts: Vec<SystemPreviewFont>,
     preview_font_signature: Vec<(PathBuf, u64, Option<std::time::SystemTime>)>,
     guides: Vec<Vec<EditorGuide>>,
     show_guides: bool,
@@ -368,6 +377,7 @@ impl StudioApp {
             },
         );
         ensure_editable_page(&mut template);
+        let system_preview_fonts = load_system_preview_fonts();
 
         let saved_template = template.clone();
         let mut app = Self {
@@ -390,6 +400,7 @@ impl StudioApp {
             canvas_mode: CanvasMode::Design,
             preview_page: 0,
             asset_cache: AssetCache::default(),
+            system_preview_fonts,
             preview_font_signature: Vec::new(),
             guides,
             show_guides,
@@ -399,6 +410,7 @@ impl StudioApp {
             guide_draft: None,
             history: EditHistory::default(),
         };
+        configure_preview_fonts(&creation.egui_ctx, &[], &app.system_preview_fonts);
         app.sync_preview_fonts(&creation.egui_ctx);
         app.reset_history();
         app
@@ -683,7 +695,7 @@ impl StudioApp {
         if signature == self.preview_font_signature {
             return;
         }
-        configure_preview_fonts(ctx, &sources);
+        configure_preview_fonts(ctx, &sources, &self.system_preview_fonts);
         self.preview_font_signature = signature;
     }
 
@@ -2990,6 +3002,14 @@ const fn builtin_preview_font_name(name: &str) -> Option<&'static str> {
         b"helvetica-bold" => Some("print-forge-preview-helvetica-bold"),
         b"helvetica-oblique" => Some("print-forge-preview-helvetica-oblique"),
         b"helvetica-bold-oblique" => Some("print-forge-preview-helvetica-bold-oblique"),
+        b"times-roman" => Some("print-forge-preview-times"),
+        b"times-bold" => Some("print-forge-preview-times-bold"),
+        b"times-italic" => Some("print-forge-preview-times-italic"),
+        b"times-bold-italic" => Some("print-forge-preview-times-bold-italic"),
+        b"courier" => Some("print-forge-preview-courier"),
+        b"courier-bold" => Some("print-forge-preview-courier-bold"),
+        b"courier-oblique" => Some("print-forge-preview-courier-oblique"),
+        b"courier-bold-oblique" => Some("print-forge-preview-courier-bold-oblique"),
         _ => None,
     }
 }
@@ -4851,10 +4871,14 @@ fn configure_style(ctx: &egui::Context) {
     style.spacing.item_spacing = Vec2::new(8.0, 7.0);
     style.spacing.button_padding = Vec2::new(10.0, 6.0);
     ctx.set_style(style);
-    configure_preview_fonts(ctx, &[]);
+    configure_preview_fonts(ctx, &[], &[]);
 }
 
-fn configure_preview_fonts(ctx: &egui::Context, external_sources: &[PathBuf]) {
+fn configure_preview_fonts(
+    ctx: &egui::Context,
+    external_sources: &[PathBuf],
+    system_fonts: &[SystemPreviewFont],
+) {
     let mut definitions = FontDefinitions::default();
     bind_preview_font(
         &mut definitions,
@@ -4884,6 +4908,29 @@ fn configure_preview_fonts(ctx: &egui::Context, external_sources: &[PathBuf]) {
             "../../../crates/pdf/assets/fonts/Helvetica-BoldOblique.ttf"
         )),
     );
+    for (name, fallback) in [
+        ("print-forge-preview-times", FontStyle::Regular),
+        ("print-forge-preview-times-bold", FontStyle::Bold),
+        ("print-forge-preview-times-italic", FontStyle::Italic),
+        (
+            "print-forge-preview-times-bold-italic",
+            FontStyle::BoldItalic,
+        ),
+        ("print-forge-preview-courier", FontStyle::Regular),
+        ("print-forge-preview-courier-bold", FontStyle::Bold),
+        ("print-forge-preview-courier-oblique", FontStyle::Italic),
+        (
+            "print-forge-preview-courier-bold-oblique",
+            FontStyle::BoldItalic,
+        ),
+    ] {
+        bind_preview_font(&mut definitions, name, bundled_helvetica_data(fallback));
+    }
+    for system_font in system_fonts {
+        let mut data = FontData::from_owned(system_font.bytes.clone());
+        data.index = system_font.face_index;
+        bind_preview_font(&mut definitions, system_font.name, data);
+    }
     for source in external_sources {
         let Ok(bytes) = fs::read(source) else {
             continue;
@@ -4898,6 +4945,104 @@ fn configure_preview_fonts(ctx: &egui::Context, external_sources: &[PathBuf]) {
         );
     }
     ctx.set_fonts(definitions);
+}
+
+fn bundled_helvetica_data(style: FontStyle) -> FontData {
+    match style {
+        FontStyle::Regular => FontData::from_static(include_bytes!(
+            "../../../crates/pdf/assets/fonts/Helvetica.ttf"
+        )),
+        FontStyle::Bold => FontData::from_static(include_bytes!(
+            "../../../crates/pdf/assets/fonts/Helvetica-Bold.ttf"
+        )),
+        FontStyle::Italic => FontData::from_static(include_bytes!(
+            "../../../crates/pdf/assets/fonts/Helvetica-Oblique.ttf"
+        )),
+        FontStyle::BoldItalic => FontData::from_static(include_bytes!(
+            "../../../crates/pdf/assets/fonts/Helvetica-BoldOblique.ttf"
+        )),
+    }
+}
+
+fn load_system_preview_fonts() -> Vec<SystemPreviewFont> {
+    const TIMES: &[SystemFontFamily<'static>] = &[
+        SystemFontFamily::Name("Times New Roman"),
+        SystemFontFamily::Name("Liberation Serif"),
+        SystemFontFamily::Name("Nimbus Roman"),
+        SystemFontFamily::Serif,
+    ];
+    const COURIER: &[SystemFontFamily<'static>] = &[
+        SystemFontFamily::Name("Courier New"),
+        SystemFontFamily::Name("Liberation Mono"),
+        SystemFontFamily::Name("Nimbus Mono PS"),
+        SystemFontFamily::Monospace,
+    ];
+    let mut database = FontDatabase::new();
+    database.load_system_fonts();
+    [
+        ("print-forge-preview-times", TIMES, FontStyle::Regular),
+        ("print-forge-preview-times-bold", TIMES, FontStyle::Bold),
+        ("print-forge-preview-times-italic", TIMES, FontStyle::Italic),
+        (
+            "print-forge-preview-times-bold-italic",
+            TIMES,
+            FontStyle::BoldItalic,
+        ),
+        ("print-forge-preview-courier", COURIER, FontStyle::Regular),
+        ("print-forge-preview-courier-bold", COURIER, FontStyle::Bold),
+        (
+            "print-forge-preview-courier-oblique",
+            COURIER,
+            FontStyle::Italic,
+        ),
+        (
+            "print-forge-preview-courier-bold-oblique",
+            COURIER,
+            FontStyle::BoldItalic,
+        ),
+    ]
+    .into_iter()
+    .filter_map(|(name, families, style)| {
+        load_system_preview_font(&database, name, families, style)
+    })
+    .collect()
+}
+
+fn load_system_preview_font(
+    database: &FontDatabase,
+    name: &'static str,
+    families: &[SystemFontFamily<'_>],
+    style: FontStyle,
+) -> Option<SystemPreviewFont> {
+    let wants_bold = matches!(style, FontStyle::Bold | FontStyle::BoldItalic);
+    let wants_italic = matches!(style, FontStyle::Italic | FontStyle::BoldItalic);
+    let query = FontQuery {
+        families,
+        weight: if wants_bold {
+            fontdb::Weight::BOLD
+        } else {
+            fontdb::Weight::NORMAL
+        },
+        stretch: fontdb::Stretch::Normal,
+        style: if wants_italic {
+            fontdb::Style::Italic
+        } else {
+            fontdb::Style::Normal
+        },
+    };
+    let id = database.query(&query)?;
+    let face = database.face(id)?;
+    if wants_bold && face.weight < fontdb::Weight::SEMIBOLD {
+        return None;
+    }
+    if wants_italic && face.style == fontdb::Style::Normal {
+        return None;
+    }
+    database.with_face_data(id, |bytes, face_index| SystemPreviewFont {
+        name,
+        bytes: bytes.to_vec(),
+        face_index,
+    })
 }
 
 fn bind_preview_font(definitions: &mut FontDefinitions, name: &str, data: FontData) {
@@ -4925,9 +5070,9 @@ mod tests {
         EditHistory, EditSnapshot, EditorGuide, ElementDragKind, ElementDragState, GuideAxis,
         PersistedState, PreviewErrorCopy, ScreenTransform, Selection, aligned_preview_text_origin,
         alignment_targets, ensure_editable_page, first_template_variable,
-        guide_position_from_pointer, inverse_rotate_vector, parse_color, preview_error_copy,
-        preview_font_family, print_color, push_editor_guide, remap_selection_after_layer_move,
-        resolve_preview, rgb_hex, safe_stem, serialize_template,
+        guide_position_from_pointer, inverse_rotate_vector, load_system_preview_fonts, parse_color,
+        preview_error_copy, preview_font_family, print_color, push_editor_guide,
+        remap_selection_after_layer_move, resolve_preview, rgb_hex, safe_stem, serialize_template,
     };
     use crate::model::{ElementKind, new_element, starter_template};
 
@@ -5039,30 +5184,47 @@ mod tests {
 
     #[test]
     fn preview_font_mapping_preserves_builtin_styles_and_external_faces() {
-        let family = |name: &str| preview_font_family(&ResolvedFont::Builtin(name.to_owned()));
-
-        assert_eq!(
-            family("helvetica"),
-            EguiFontFamily::Name("print-forge-preview-helvetica".into())
-        );
-        assert_eq!(
-            family("helvetica-bold"),
-            EguiFontFamily::Name("print-forge-preview-helvetica-bold".into())
-        );
-        assert_eq!(
-            family("helvetica-oblique"),
-            EguiFontFamily::Name("print-forge-preview-helvetica-oblique".into())
-        );
-        assert_eq!(
-            family("helvetica-bold-oblique"),
-            EguiFontFamily::Name("print-forge-preview-helvetica-bold-oblique".into())
-        );
+        for (resolved, preview) in [
+            ("helvetica", "print-forge-preview-helvetica"),
+            ("helvetica-bold", "print-forge-preview-helvetica-bold"),
+            ("helvetica-oblique", "print-forge-preview-helvetica-oblique"),
+            (
+                "helvetica-bold-oblique",
+                "print-forge-preview-helvetica-bold-oblique",
+            ),
+            ("times-roman", "print-forge-preview-times"),
+            ("times-bold", "print-forge-preview-times-bold"),
+            ("times-italic", "print-forge-preview-times-italic"),
+            ("times-bold-italic", "print-forge-preview-times-bold-italic"),
+            ("courier", "print-forge-preview-courier"),
+            ("courier-bold", "print-forge-preview-courier-bold"),
+            ("courier-oblique", "print-forge-preview-courier-oblique"),
+            (
+                "courier-bold-oblique",
+                "print-forge-preview-courier-bold-oblique",
+            ),
+        ] {
+            assert_eq!(
+                preview_font_family(&ResolvedFont::Builtin(resolved.to_owned())),
+                EguiFontFamily::Name(preview.into())
+            );
+        }
         assert_eq!(
             preview_font_family(&ResolvedFont::External(PathBuf::from(
                 "/tmp/Example-Bold.ttf"
             ))),
             EguiFontFamily::Name("print-forge-preview:/tmp/Example-Bold.ttf".into())
         );
+    }
+
+    #[test]
+    fn discovered_system_preview_faces_are_parseable() {
+        let fonts = load_system_preview_fonts();
+        #[cfg(target_os = "macos")]
+        assert_eq!(fonts.len(), 8);
+        for font in fonts {
+            assert!(ttf_parser::Face::parse(&font.bytes, font.face_index).is_ok());
+        }
     }
 
     #[test]
