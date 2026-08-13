@@ -666,7 +666,7 @@ fn render_text(
 
 #[derive(Default)]
 struct FontResources {
-    external: BTreeMap<PathBuf, PdfFontHandle>,
+    external: BTreeMap<(PathBuf, u32), PdfFontHandle>,
     bundled: BTreeMap<&'static str, PdfFontHandle>,
 }
 
@@ -707,24 +707,40 @@ fn pdf_font(
             Ok(handle)
         }
         ResolvedFont::Builtin(name) => Ok(PdfFontHandle::Builtin(builtin_font(name)?)),
-        ResolvedFont::External(path) => {
-            if let Some(font) = fonts.external.get(path) {
-                return Ok(font.clone());
-            }
-            let bytes = fs::read(path)
-                .with_context(|| format!("failed to read font {}", path.display()))?;
-            let parsed = ParsedFont::from_bytes(&bytes, 0, &mut Vec::new())
-                .ok_or_else(|| anyhow!("failed to parse font {}", path.display()))?;
-            let id = fonts.next_id();
-            pdf.resources
-                .fonts
-                .map
-                .insert(id.clone(), PdfFont::new(parsed));
-            let handle = PdfFontHandle::External(id);
-            fonts.external.insert(path.clone(), handle.clone());
-            Ok(handle)
+        ResolvedFont::External(path) => external_pdf_font(path, 0, pdf, fonts),
+        ResolvedFont::ExternalFace { path, face_index } => {
+            external_pdf_font(path, *face_index, pdf, fonts)
         }
     }
+}
+
+fn external_pdf_font(
+    path: &Path,
+    face_index: u32,
+    pdf: &mut PdfDocument,
+    fonts: &mut FontResources,
+) -> Result<PdfFontHandle> {
+    let key = (path.to_owned(), face_index);
+    if let Some(font) = fonts.external.get(&key) {
+        return Ok(font.clone());
+    }
+    let bytes =
+        fs::read(path).with_context(|| format!("failed to read font {}", path.display()))?;
+    let parsed =
+        ParsedFont::from_bytes(&bytes, face_index as usize, &mut Vec::new()).ok_or_else(|| {
+            anyhow!(
+                "failed to parse font {} at face index {face_index}",
+                path.display()
+            )
+        })?;
+    let id = fonts.next_id();
+    pdf.resources
+        .fonts
+        .map
+        .insert(id.clone(), PdfFont::new(parsed));
+    let handle = PdfFontHandle::External(id);
+    fonts.external.insert(key, handle.clone());
+    Ok(handle)
 }
 
 fn bundled_font(name: &str) -> Option<(&'static str, &'static [u8])> {

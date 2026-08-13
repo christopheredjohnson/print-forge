@@ -41,6 +41,14 @@ pub struct ImportedFont {
     pub family: String,
     pub style: ImportedFontStyle,
     pub relative_path: String,
+    pub face_index: u32,
+}
+
+pub struct FontFaceExport {
+    pub style: ImportedFontStyle,
+    pub bytes: Vec<u8>,
+    pub face_index: u32,
+    pub file_name: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -128,7 +136,7 @@ pub fn list_managed_assets(project_root: &Path) -> Result<Vec<ManagedAsset>, Str
         project_root,
         FONTS_DIR,
         |extension| match extension {
-            "ttf" | "otf" => Some(ManagedAssetKind::Font),
+            "ttf" | "otf" | "ttc" | "otc" | "dfont" => Some(ManagedAssetKind::Font),
             _ => None,
         },
         &mut assets,
@@ -206,15 +214,78 @@ pub fn import_font_assets(
             families.push(FontFamily {
                 name: family.clone(),
                 regular: asset.relative_path.clone(),
+                regular_face_index: 0,
                 bold: None,
+                bold_face_index: 0,
                 italic: None,
+                italic_face_index: 0,
                 bold_italic: None,
+                bold_italic_face_index: 0,
             });
         }
         imported.push(ImportedFont {
             family,
             style,
             relative_path: asset.relative_path,
+            face_index: 0,
+        });
+    }
+    Ok(imported)
+}
+
+pub fn export_font_family(
+    family_name: &str,
+    faces: &[FontFaceExport],
+    project_root: &Path,
+    families: &mut Vec<FontFamily>,
+) -> Result<Vec<ImportedFont>, String> {
+    if !faces
+        .iter()
+        .any(|face| face.style == ImportedFontStyle::Regular)
+    {
+        return Err(format!(
+            "system font family {family_name:?} has no exportable regular face"
+        ));
+    }
+    let mut ordered = faces.iter().collect::<Vec<_>>();
+    ordered.sort_by_key(|face| match face.style {
+        ImportedFontStyle::Regular => 0,
+        ImportedFontStyle::Bold => 1,
+        ImportedFontStyle::Italic => 2,
+        ImportedFontStyle::BoldItalic => 3,
+    });
+    let mut imported = Vec::new();
+    for face in ordered {
+        let target = write_managed_font(&face.bytes, &face.file_name, project_root)?;
+        let asset = managed_asset(project_root, target, ManagedAssetKind::Font)?;
+        if let Some(family) = families
+            .iter_mut()
+            .find(|family| family.name == family_name)
+        {
+            set_font_variant_with_index(
+                family,
+                face.style,
+                asset.relative_path.clone(),
+                face.face_index,
+            );
+        } else if face.style == ImportedFontStyle::Regular {
+            families.push(FontFamily {
+                name: family_name.to_owned(),
+                regular: asset.relative_path.clone(),
+                regular_face_index: face.face_index,
+                bold: None,
+                bold_face_index: 0,
+                italic: None,
+                italic_face_index: 0,
+                bold_italic: None,
+                bold_italic_face_index: 0,
+            });
+        }
+        imported.push(ImportedFont {
+            family: family_name.to_owned(),
+            style: face.style,
+            relative_path: asset.relative_path,
+            face_index: face.face_index,
         });
     }
     Ok(imported)
@@ -357,6 +428,27 @@ fn copy_managed_file(
     Ok(target)
 }
 
+fn write_managed_font(
+    bytes: &[u8],
+    file_name: &str,
+    project_root: &Path,
+) -> Result<PathBuf, String> {
+    let file_name = Path::new(file_name)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .ok_or_else(|| format!("font has no usable filename: {file_name}"))?;
+    let target_directory = project_root.join(FONTS_DIR);
+    fs::create_dir_all(&target_directory)
+        .map_err(|error| format!("could not create {}: {error}", target_directory.display()))?;
+    let target = available_target_for_bytes(bytes, &target_directory, file_name)?;
+    if !target.is_file() || !same_contents_bytes(bytes, &target)? {
+        fs::write(&target, bytes)
+            .map_err(|error| format!("could not write {}: {error}", target.display()))?;
+    }
+    Ok(target)
+}
+
 fn extension(path: &Path) -> String {
     path.extension()
         .and_then(|extension| extension.to_str())
@@ -448,11 +540,32 @@ fn normalize_font_family(family: &mut String, style: ImportedFontStyle) {
 }
 
 fn set_font_variant(family: &mut FontFamily, style: ImportedFontStyle, source: String) {
+    set_font_variant_with_index(family, style, source, 0);
+}
+
+fn set_font_variant_with_index(
+    family: &mut FontFamily,
+    style: ImportedFontStyle,
+    source: String,
+    face_index: u32,
+) {
     match style {
-        ImportedFontStyle::Regular => family.regular = source,
-        ImportedFontStyle::Bold => family.bold = Some(source),
-        ImportedFontStyle::Italic => family.italic = Some(source),
-        ImportedFontStyle::BoldItalic => family.bold_italic = Some(source),
+        ImportedFontStyle::Regular => {
+            family.regular = source;
+            family.regular_face_index = face_index;
+        }
+        ImportedFontStyle::Bold => {
+            family.bold = Some(source);
+            family.bold_face_index = face_index;
+        }
+        ImportedFontStyle::Italic => {
+            family.italic = Some(source);
+            family.italic_face_index = face_index;
+        }
+        ImportedFontStyle::BoldItalic => {
+            family.bold_italic = Some(source);
+            family.bold_italic_face_index = face_index;
+        }
     }
 }
 
@@ -621,6 +734,36 @@ fn available_target(source: &Path, directory: &Path, file_name: &str) -> Result<
     ))
 }
 
+fn available_target_for_bytes(
+    bytes: &[u8],
+    directory: &Path,
+    file_name: &str,
+) -> Result<PathBuf, String> {
+    let direct = directory.join(file_name);
+    if !direct.exists() || same_contents_bytes(bytes, &direct)? {
+        return Ok(direct);
+    }
+    let file_name = Path::new(file_name);
+    let stem = file_name
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("font");
+    let extension = file_name.extension().and_then(|value| value.to_str());
+    for suffix in 2..=10_000 {
+        let candidate = extension.map_or_else(
+            || format!("{stem}-{suffix}"),
+            |extension| format!("{stem}-{suffix}.{extension}"),
+        );
+        let candidate = directory.join(candidate);
+        if !candidate.exists() || same_contents_bytes(bytes, &candidate)? {
+            return Ok(candidate);
+        }
+    }
+    Err(format!(
+        "could not find an available font filename for {file_name:?}"
+    ))
+}
+
 fn same_contents(left: &Path, right: &Path) -> Result<bool, String> {
     let left_metadata = fs::metadata(left).map_err(|error| error.to_string())?;
     let right_metadata = fs::metadata(right).map_err(|error| error.to_string())?;
@@ -628,6 +771,15 @@ fn same_contents(left: &Path, right: &Path) -> Result<bool, String> {
         return Ok(false);
     }
     let left = fs::read(left).map_err(|error| error.to_string())?;
+    let right = fs::read(right).map_err(|error| error.to_string())?;
+    Ok(left == right)
+}
+
+fn same_contents_bytes(left: &[u8], right: &Path) -> Result<bool, String> {
+    let right_metadata = fs::metadata(right).map_err(|error| error.to_string())?;
+    if left.len() as u64 != right_metadata.len() {
+        return Ok(false);
+    }
     let right = fs::read(right).map_err(|error| error.to_string())?;
     Ok(left == right)
 }
@@ -643,9 +795,9 @@ mod tests {
     use print_forge_template::{Element, FontFamily};
 
     use super::{
-        FONTS_DIR, IMAGES_DIR, ImportedFontStyle, ManagedAssetKind, PROJECT_MANIFEST,
-        import_font_assets, import_visual_asset, list_managed_assets, missing_local_assets,
-        save_project_folder,
+        FONTS_DIR, FontFaceExport, IMAGES_DIR, ImportedFontStyle, ManagedAssetKind,
+        PROJECT_MANIFEST, export_font_family, import_font_assets, import_visual_asset,
+        list_managed_assets, missing_local_assets, save_project_folder,
     };
     use crate::model::{ElementKind, new_element, starter_template};
 
@@ -686,9 +838,13 @@ mod tests {
         template.fonts.push(FontFamily {
             name: "Body".to_owned(),
             regular: "body.ttf".to_owned(),
+            regular_face_index: 0,
             bold: None,
+            bold_face_index: 0,
             italic: None,
+            italic_face_index: 0,
             bold_italic: None,
+            bold_italic_face_index: 0,
         });
 
         let saved = save_project_folder(&template, &source, &project).unwrap();
@@ -797,6 +953,43 @@ mod tests {
             Some("assets/fonts/Helvetica-Bold.ttf")
         );
         assert!(project.join(&families[0].regular).is_file());
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn system_font_export_preserves_collection_face_indexes() {
+        let root = temporary_root("system-font-export-test");
+        let project = root.join("project");
+        let bytes = include_bytes!("../../../crates/pdf/assets/fonts/Helvetica.ttf").to_vec();
+        let faces = [
+            FontFaceExport {
+                style: ImportedFontStyle::Regular,
+                bytes: bytes.clone(),
+                face_index: 0,
+                file_name: "Example.ttc".to_owned(),
+            },
+            FontFaceExport {
+                style: ImportedFontStyle::Bold,
+                bytes,
+                face_index: 2,
+                file_name: "Example.ttc".to_owned(),
+            },
+        ];
+        let mut families = Vec::new();
+
+        let imported = export_font_family("Example", &faces, &project, &mut families).unwrap();
+
+        assert_eq!(imported.len(), 2);
+        assert_eq!(families.len(), 1);
+        assert_eq!(families[0].regular, "assets/fonts/Example.ttc");
+        assert_eq!(families[0].regular_face_index, 0);
+        assert_eq!(
+            families[0].bold.as_deref(),
+            Some("assets/fonts/Example.ttc")
+        );
+        assert_eq!(families[0].bold_face_index, 2);
+        assert!(project.join("assets/fonts/Example.ttc").is_file());
 
         fs::remove_dir_all(root).unwrap();
     }

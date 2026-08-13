@@ -12,7 +12,6 @@ use eframe::egui::{
     FontFamily as EguiFontFamily, FontId, Frame, Id, Key, Layout, Margin, Pos2, Rect, RichText,
     ScrollArea, Sense, Stroke, StrokeKind, TextureHandle, TextureOptions, Vec2,
 };
-use fontdb::{Database as FontDatabase, Family as SystemFontFamily, Query as FontQuery};
 use print_forge_dataset::DataRow;
 use print_forge_engine::{
     BasicLayoutEngine, DrawCommand, ElementLayoutError, LayoutError, LayoutOptions, LineDash,
@@ -35,9 +34,11 @@ use crate::model::{
     starter_template, translate_element, translate_line_endpoint,
 };
 use crate::project::{
-    ManagedAsset, ManagedAssetKind, PROJECT_MANIFEST, font_style_label, import_font_assets,
-    import_visual_asset, list_managed_assets, missing_local_assets, save_project_folder,
+    FontFaceExport, ImportedFontStyle, ManagedAsset, ManagedAssetKind, PROJECT_MANIFEST,
+    export_font_family, font_style_label, import_font_assets, import_visual_asset,
+    list_managed_assets, missing_local_assets, save_project_folder,
 };
+use crate::system_fonts::{PreviewFontFace, SystemFontCatalog};
 
 const APP_STATE_KEY: &str = "print-forge-studio-state";
 const ORANGE: Color32 = Color32::from_rgb(244, 91, 32);
@@ -202,13 +203,6 @@ struct ResolvedPreview {
 }
 
 #[derive(Clone)]
-struct SystemPreviewFont {
-    name: &'static str,
-    bytes: Vec<u8>,
-    face_index: u32,
-}
-
-#[derive(Clone)]
 struct EditSnapshot {
     template: Template,
     guides: Vec<Vec<EditorGuide>>,
@@ -327,8 +321,11 @@ pub struct StudioApp {
     canvas_mode: CanvasMode,
     preview_page: usize,
     asset_cache: AssetCache,
-    system_preview_fonts: Vec<SystemPreviewFont>,
-    preview_font_signature: Vec<(PathBuf, u64, Option<std::time::SystemTime>)>,
+    system_font_catalog: SystemFontCatalog,
+    system_preview_fonts: Vec<PreviewFontFace>,
+    preview_font_signature: Vec<(PathBuf, u32, u64, Option<std::time::SystemTime>)>,
+    show_system_fonts: bool,
+    system_font_search: String,
     guides: Vec<Vec<EditorGuide>>,
     show_guides: bool,
     snap_enabled: bool,
@@ -377,7 +374,8 @@ impl StudioApp {
             },
         );
         ensure_editable_page(&mut template);
-        let system_preview_fonts = load_system_preview_fonts();
+        let system_font_catalog = SystemFontCatalog::load();
+        let system_preview_fonts = system_font_catalog.builtin_preview_faces();
 
         let saved_template = template.clone();
         let mut app = Self {
@@ -400,8 +398,11 @@ impl StudioApp {
             canvas_mode: CanvasMode::Design,
             preview_page: 0,
             asset_cache: AssetCache::default(),
+            system_font_catalog,
             system_preview_fonts,
             preview_font_signature: Vec::new(),
+            show_system_fonts: false,
+            system_font_search: String::new(),
             guides,
             show_guides,
             snap_enabled,
@@ -519,9 +520,18 @@ impl StudioApp {
             None
         }
         .or_else(|| {
-            FileDialog::new()
-                .set_title("Choose or create the Print Forge project folder")
-                .pick_folder()
+            let initial_directory = self
+                .current_path
+                .as_deref()
+                .and_then(Path::parent)
+                .map(Path::to_owned)
+                .or_else(|| std::env::current_dir().ok());
+            let mut dialog =
+                FileDialog::new().set_title("Choose or create the Print Forge project folder");
+            if let Some(initial_directory) = initial_directory {
+                dialog = dialog.set_directory(initial_directory);
+            }
+            dialog.pick_folder()
         });
         let Some(project_root) = project_root else {
             return;
@@ -662,31 +672,42 @@ impl StudioApp {
             .iter()
             .flat_map(|family| {
                 [
-                    Some(family.regular.as_str()),
-                    family.bold.as_deref(),
-                    family.italic.as_deref(),
-                    family.bold_italic.as_deref(),
+                    Some((family.regular.as_str(), family.regular_face_index)),
+                    family
+                        .bold
+                        .as_deref()
+                        .map(|source| (source, family.bold_face_index)),
+                    family
+                        .italic
+                        .as_deref()
+                        .map(|source| (source, family.italic_face_index)),
+                    family
+                        .bold_italic
+                        .as_deref()
+                        .map(|source| (source, family.bold_italic_face_index)),
                 ]
                 .into_iter()
                 .flatten()
             })
-            .map(|source| {
+            .map(|(source, face_index)| {
                 let source = Path::new(source);
-                if source.is_absolute() {
+                let path = if source.is_absolute() {
                     source.to_owned()
                 } else {
                     asset_base.join(source)
-                }
+                };
+                (path, face_index)
             })
             .collect::<Vec<_>>();
         sources.sort();
         sources.dedup();
         let signature = sources
             .iter()
-            .map(|source| {
+            .map(|(source, face_index)| {
                 let metadata = fs::metadata(source).ok();
                 (
                     source.clone(),
+                    *face_index,
                     metadata.as_ref().map_or(0, std::fs::Metadata::len),
                     metadata.and_then(|metadata| metadata.modified().ok()),
                 )
@@ -772,6 +793,66 @@ impl StudioApp {
         }
     }
 
+    fn export_system_font_family(&mut self, family_index: usize) {
+        let Some(family) = self.system_font_catalog.families().get(family_index) else {
+            return;
+        };
+        let family_name = family.name.clone();
+        if self.project_root().is_none()
+            && !matches!(
+                MessageDialog::new()
+                    .set_level(MessageLevel::Info)
+                    .set_title("Save a project before adding fonts")
+                    .set_description(format!(
+                        "Print Forge will copy the available {family_name} font files into the project's assets/fonts folder so previews and exported PDFs stay portable. Choose or create the project folder now?"
+                    ))
+                    .set_buttons(MessageButtons::OkCancel)
+                    .show(),
+                MessageDialogResult::Ok
+            )
+        {
+            return;
+        }
+        let Some(project_root) = self.ensure_project_root() else {
+            return;
+        };
+        let faces = self
+            .system_font_catalog
+            .exportable_faces(family_index)
+            .into_iter()
+            .map(|face| FontFaceExport {
+                style: face.style,
+                bytes: face.bytes,
+                face_index: face.face_index,
+                file_name: face.file_name,
+            })
+            .collect::<Vec<_>>();
+        match export_font_family(
+            &family_name,
+            &faces,
+            &project_root,
+            &mut self.template.fonts,
+        ) {
+            Ok(imported) => {
+                self.dirty = true;
+                self.preview_font_signature.clear();
+                let styles = imported
+                    .iter()
+                    .map(|font| font_style_label(font.style))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                self.set_notice(
+                    NoticeKind::Success,
+                    format!("Added system font {family_name} ({styles}) to this project"),
+                );
+            }
+            Err(error) => self.set_notice(
+                NoticeKind::Error,
+                format!("System font export failed: {error}"),
+            ),
+        }
+    }
+
     fn place_visual_asset(&mut self, asset: &ManagedAsset) {
         let kind = match asset.kind {
             ManagedAssetKind::RasterImage => ElementKind::Image,
@@ -805,6 +886,9 @@ impl StudioApp {
                 }
             });
         });
+        if ui.small_button("Browse system fonts").clicked() {
+            self.show_system_fonts = true;
+        }
         let Some(project_root) = self.project_root() else {
             ui.label(
                 RichText::new("Save this template as a project to manage local assets.")
@@ -2391,6 +2475,128 @@ impl StudioApp {
         self.show_preview_data = open;
     }
 
+    fn show_system_fonts_window(&mut self, ctx: &egui::Context) {
+        if !self.show_system_fonts {
+            return;
+        }
+        let mut open = self.show_system_fonts;
+        let mut export_family = None;
+        egui::Window::new("System fonts")
+            .open(&mut open)
+            .default_width(660.0)
+            .default_height(620.0)
+            .resizable(true)
+            .show(ctx, |ui| {
+                ui.label(
+                    "Choose an installed family to copy its embeddable faces into this project. Only styles actually available on this computer are shown.",
+                );
+                ui.label(
+                    RichText::new(
+                        "Embedding permission comes from the font metadata. Confirm that the font license also permits packaging and distributing the font files with your project.",
+                    )
+                    .color(Color32::from_rgb(226, 174, 105))
+                    .small(),
+                );
+                ui.add_space(8.0);
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.system_font_search)
+                        .desired_width(f32::INFINITY)
+                        .hint_text("Search installed font families"),
+                );
+                let search = self.system_font_search.trim().to_lowercase();
+                let matching = self
+                    .system_font_catalog
+                    .families()
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, family)| {
+                        search.is_empty() || family.name.to_lowercase().contains(&search)
+                    })
+                    .collect::<Vec<_>>();
+                let matching_count = matching.len();
+                ui.label(
+                    RichText::new(format!("{matching_count} matching families"))
+                        .color(Color32::from_gray(145))
+                        .small(),
+                );
+                ui.separator();
+                ScrollArea::vertical().show(ui, |ui| {
+                    for (index, family) in matching.into_iter().take(300) {
+                        ui.group(|ui| {
+                            ui.set_width(ui.available_width());
+                            ui.horizontal(|ui| {
+                                ui.label(RichText::new(&family.name).strong());
+                                if self
+                                    .template
+                                    .fonts
+                                    .iter()
+                                    .any(|font| font.name == family.name)
+                                {
+                                    ui.label(
+                                        RichText::new("IN PROJECT")
+                                            .color(Color32::from_rgb(83, 194, 131))
+                                            .small(),
+                                    );
+                                }
+                            });
+                            for face in &family.faces {
+                                let embeddable = face.embedding.allows_pdf_embedding();
+                                let color = if embeddable {
+                                    Color32::from_gray(190)
+                                } else {
+                                    Color32::from_rgb(242, 111, 111)
+                                };
+                                ui.label(
+                                    RichText::new(format!(
+                                        "{} · {}",
+                                        font_style_label(face.style),
+                                        face.embedding.label()
+                                    ))
+                                    .color(color)
+                                    .small(),
+                                )
+                                .on_hover_text(format!(
+                                    "{} · {} · face index {}",
+                                    face.post_script_name, face.file_name, face.face_index
+                                ));
+                            }
+                            let regular_is_exportable = family.faces.iter().any(|face| {
+                                face.style == ImportedFontStyle::Regular
+                                    && face.embedding.allows_pdf_embedding()
+                            });
+                            let label = if self
+                                .template
+                                .fonts
+                                .iter()
+                                .any(|font| font.name == family.name)
+                            {
+                                "Update project faces"
+                            } else {
+                                "Add family to project"
+                            };
+                            if ui
+                                .add_enabled(regular_is_exportable, egui::Button::new(label))
+                                .on_disabled_hover_text(
+                                    "The regular face does not allow outline embedding",
+                                )
+                                .clicked()
+                            {
+                                export_family = Some(index);
+                            }
+                        });
+                        ui.add_space(6.0);
+                    }
+                    if matching_count > 300 {
+                        ui.label("Refine the search to see additional families.");
+                    }
+                });
+            });
+        self.show_system_fonts = open;
+        if let Some(index) = export_family {
+            self.export_system_font_family(index);
+        }
+    }
+
     fn handle_shortcuts(&mut self, ctx: &egui::Context) {
         let (undo, redo, save, save_as, open, duplicate, delete, toggle_guides, toggle_snap) = ctx
             .input(|input| {
@@ -2505,6 +2711,7 @@ impl eframe::App for StudioApp {
         self.show_status(ctx, &report);
         self.show_json_window(ctx);
         self.show_preview_data_window(ctx);
+        self.show_system_fonts_window(ctx);
         self.observe_history(ctx);
     }
 
@@ -2991,7 +3198,10 @@ fn preview_font_family(font: &ResolvedFont) -> EguiFontFamily {
             |name| EguiFontFamily::Name(name.into()),
         ),
         ResolvedFont::External(path) => {
-            EguiFontFamily::Name(external_preview_font_name(path).into())
+            EguiFontFamily::Name(external_preview_font_name(path, 0).into())
+        }
+        ResolvedFont::ExternalFace { path, face_index } => {
+            EguiFontFamily::Name(external_preview_font_name(path, *face_index).into())
         }
     }
 }
@@ -3014,8 +3224,11 @@ const fn builtin_preview_font_name(name: &str) -> Option<&'static str> {
     }
 }
 
-fn external_preview_font_name(path: &Path) -> String {
-    format!("print-forge-preview:{}", path.to_string_lossy())
+fn external_preview_font_name(path: &Path, face_index: u32) -> String {
+    format!(
+        "print-forge-preview:{}#{face_index}",
+        path.to_string_lossy()
+    )
 }
 
 fn galley_baseline_offset(galley: &egui::Galley) -> f32 {
@@ -4876,8 +5089,8 @@ fn configure_style(ctx: &egui::Context) {
 
 fn configure_preview_fonts(
     ctx: &egui::Context,
-    external_sources: &[PathBuf],
-    system_fonts: &[SystemPreviewFont],
+    external_sources: &[(PathBuf, u32)],
+    system_fonts: &[PreviewFontFace],
 ) {
     let mut definitions = FontDefinitions::default();
     bind_preview_font(
@@ -4931,17 +5144,19 @@ fn configure_preview_fonts(
         data.index = system_font.face_index;
         bind_preview_font(&mut definitions, system_font.name, data);
     }
-    for source in external_sources {
+    for (source, face_index) in external_sources {
         let Ok(bytes) = fs::read(source) else {
             continue;
         };
-        if ttf_parser::Face::parse(&bytes, 0).is_err() {
+        if ttf_parser::Face::parse(&bytes, *face_index).is_err() {
             continue;
         }
+        let mut data = FontData::from_owned(bytes);
+        data.index = *face_index;
         bind_preview_font(
             &mut definitions,
-            &external_preview_font_name(source),
-            FontData::from_owned(bytes),
+            &external_preview_font_name(source, *face_index),
+            data,
         );
     }
     ctx.set_fonts(definitions);
@@ -4962,87 +5177,6 @@ fn bundled_helvetica_data(style: FontStyle) -> FontData {
             "../../../crates/pdf/assets/fonts/Helvetica-BoldOblique.ttf"
         )),
     }
-}
-
-fn load_system_preview_fonts() -> Vec<SystemPreviewFont> {
-    const TIMES: &[SystemFontFamily<'static>] = &[
-        SystemFontFamily::Name("Times New Roman"),
-        SystemFontFamily::Name("Liberation Serif"),
-        SystemFontFamily::Name("Nimbus Roman"),
-        SystemFontFamily::Serif,
-    ];
-    const COURIER: &[SystemFontFamily<'static>] = &[
-        SystemFontFamily::Name("Courier New"),
-        SystemFontFamily::Name("Liberation Mono"),
-        SystemFontFamily::Name("Nimbus Mono PS"),
-        SystemFontFamily::Monospace,
-    ];
-    let mut database = FontDatabase::new();
-    database.load_system_fonts();
-    [
-        ("print-forge-preview-times", TIMES, FontStyle::Regular),
-        ("print-forge-preview-times-bold", TIMES, FontStyle::Bold),
-        ("print-forge-preview-times-italic", TIMES, FontStyle::Italic),
-        (
-            "print-forge-preview-times-bold-italic",
-            TIMES,
-            FontStyle::BoldItalic,
-        ),
-        ("print-forge-preview-courier", COURIER, FontStyle::Regular),
-        ("print-forge-preview-courier-bold", COURIER, FontStyle::Bold),
-        (
-            "print-forge-preview-courier-oblique",
-            COURIER,
-            FontStyle::Italic,
-        ),
-        (
-            "print-forge-preview-courier-bold-oblique",
-            COURIER,
-            FontStyle::BoldItalic,
-        ),
-    ]
-    .into_iter()
-    .filter_map(|(name, families, style)| {
-        load_system_preview_font(&database, name, families, style)
-    })
-    .collect()
-}
-
-fn load_system_preview_font(
-    database: &FontDatabase,
-    name: &'static str,
-    families: &[SystemFontFamily<'_>],
-    style: FontStyle,
-) -> Option<SystemPreviewFont> {
-    let wants_bold = matches!(style, FontStyle::Bold | FontStyle::BoldItalic);
-    let wants_italic = matches!(style, FontStyle::Italic | FontStyle::BoldItalic);
-    let query = FontQuery {
-        families,
-        weight: if wants_bold {
-            fontdb::Weight::BOLD
-        } else {
-            fontdb::Weight::NORMAL
-        },
-        stretch: fontdb::Stretch::Normal,
-        style: if wants_italic {
-            fontdb::Style::Italic
-        } else {
-            fontdb::Style::Normal
-        },
-    };
-    let id = database.query(&query)?;
-    let face = database.face(id)?;
-    if wants_bold && face.weight < fontdb::Weight::SEMIBOLD {
-        return None;
-    }
-    if wants_italic && face.style == fontdb::Style::Normal {
-        return None;
-    }
-    database.with_face_data(id, |bytes, face_index| SystemPreviewFont {
-        name,
-        bytes: bytes.to_vec(),
-        face_index,
-    })
 }
 
 fn bind_preview_font(definitions: &mut FontDefinitions, name: &str, data: FontData) {
@@ -5070,11 +5204,12 @@ mod tests {
         EditHistory, EditSnapshot, EditorGuide, ElementDragKind, ElementDragState, GuideAxis,
         PersistedState, PreviewErrorCopy, ScreenTransform, Selection, aligned_preview_text_origin,
         alignment_targets, ensure_editable_page, first_template_variable,
-        guide_position_from_pointer, inverse_rotate_vector, load_system_preview_fonts, parse_color,
-        preview_error_copy, preview_font_family, print_color, push_editor_guide,
-        remap_selection_after_layer_move, resolve_preview, rgb_hex, safe_stem, serialize_template,
+        guide_position_from_pointer, inverse_rotate_vector, parse_color, preview_error_copy,
+        preview_font_family, print_color, push_editor_guide, remap_selection_after_layer_move,
+        resolve_preview, rgb_hex, safe_stem, serialize_template,
     };
     use crate::model::{ElementKind, new_element, starter_template};
+    use crate::system_fonts::SystemFontCatalog;
 
     #[test]
     fn serialized_studio_templates_round_trip() {
@@ -5213,13 +5348,20 @@ mod tests {
             preview_font_family(&ResolvedFont::External(PathBuf::from(
                 "/tmp/Example-Bold.ttf"
             ))),
-            EguiFontFamily::Name("print-forge-preview:/tmp/Example-Bold.ttf".into())
+            EguiFontFamily::Name("print-forge-preview:/tmp/Example-Bold.ttf#0".into())
+        );
+        assert_eq!(
+            preview_font_family(&ResolvedFont::ExternalFace {
+                path: PathBuf::from("/tmp/Example.ttc"),
+                face_index: 3,
+            }),
+            EguiFontFamily::Name("print-forge-preview:/tmp/Example.ttc#3".into())
         );
     }
 
     #[test]
     fn discovered_system_preview_faces_are_parseable() {
-        let fonts = load_system_preview_fonts();
+        let fonts = SystemFontCatalog::load().builtin_preview_faces();
         #[cfg(target_os = "macos")]
         assert_eq!(fonts.len(), 8);
         for font in fonts {

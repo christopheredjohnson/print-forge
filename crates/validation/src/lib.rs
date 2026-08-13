@@ -474,6 +474,28 @@ fn validate_fonts(fonts: &[FontFamily], report: &mut ValidationReport) {
                 );
             }
         }
+        for (variant, source, face_index) in [
+            (
+                "regular",
+                Some(font.regular.as_str()),
+                font.regular_face_index,
+            ),
+            ("bold", font.bold.as_deref(), font.bold_face_index),
+            ("italic", font.italic.as_deref(), font.italic_face_index),
+            (
+                "bold_italic",
+                font.bold_italic.as_deref(),
+                font.bold_italic_face_index,
+            ),
+        ] {
+            if source.is_none() && face_index != 0 {
+                report.error(
+                    "font.orphan_face_index",
+                    format!("{path}.{variant}_face_index"),
+                    "font face index requires a corresponding font asset path",
+                );
+            }
+        }
     }
 }
 

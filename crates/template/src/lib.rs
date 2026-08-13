@@ -241,12 +241,24 @@ pub struct Template {
 pub struct FontFamily {
     pub name: String,
     pub regular: String,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub regular_face_index: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bold: Option<String>,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub bold_face_index: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub italic: Option<String>,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub italic_face_index: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bold_italic: Option<String>,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub bold_italic_face_index: u32,
+}
+
+const fn is_zero(value: &u32) -> bool {
+    *value == 0
 }
 
 const fn default_schema_version() -> u32 {
@@ -867,14 +879,29 @@ const fn default_table_header_font_style() -> FontStyle {
 #[cfg(test)]
 mod tests {
     use super::{
-        BarcodeFormat, Color, Element, FlowOverflow, FontStyle, Length, QrErrorCorrection,
-        TableColumnWidth, Template,
+        BarcodeFormat, Color, Element, FlowOverflow, FontFamily, FontStyle, Length,
+        QrErrorCorrection, TableColumnWidth, Template,
     };
 
     #[test]
     fn converts_supported_units_to_points() {
         assert_eq!(Length::inches(1.0).to_points(), 72.0);
         assert!((Length::millimeters(25.4).to_points() - 72.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn font_face_indexes_are_additive_and_omit_zero_defaults() {
+        let legacy: FontFamily =
+            serde_json::from_str(r#"{"name":"Body","regular":"body.ttf","bold":"body-bold.ttf"}"#)
+                .unwrap();
+        assert_eq!(legacy.regular_face_index, 0);
+        assert_eq!(legacy.bold_face_index, 0);
+        let mut collection = legacy;
+        collection.regular = "body.ttc".to_owned();
+        collection.regular_face_index = 2;
+        let json = serde_json::to_value(collection).unwrap();
+        assert_eq!(json["regular_face_index"], 2);
+        assert!(json.get("bold_face_index").is_none());
     }
 
     #[test]

@@ -58,6 +58,16 @@ warns when a selected custom style is not available. Missing local references
 are called out in the Assets panel. Helvetica remains available as a bundled
 choice and is not copied into each project.
 
+`Browse system fonts` searches installed font families and lists the regular,
+bold, italic, and bold-italic faces that are actually available. Adding a
+family copies every embeddable face into `assets/fonts/` and registers it in
+the template, making PDF output portable instead of depending on the authoring
+computer. TrueType/OpenType collections are supported through optional
+per-style face indexes in the template. Studio reads the OS/2 embedding
+permission from each face and disables export when outline embedding is not
+allowed; the designer remains responsible for confirming that the font license
+permits packaging and distributing the copied font software.
+
 The initial Studio supports native open/save dialogs, multipage projects,
 draggable, resizable, and rotatable page elements, named layers with persisted
 visibility and editing locks, drag-to-reorder paint order,

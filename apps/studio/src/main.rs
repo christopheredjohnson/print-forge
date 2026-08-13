@@ -1,6 +1,7 @@
 mod app;
 mod model;
 mod project;
+mod system_fonts;
 
 fn main() -> eframe::Result {
     let options = eframe::NativeOptions {

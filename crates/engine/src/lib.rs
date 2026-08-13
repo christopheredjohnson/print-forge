@@ -75,6 +75,7 @@ pub struct TextLine {
 pub enum ResolvedFont {
     Builtin(String),
     External(PathBuf),
+    ExternalFace { path: PathBuf, face_index: u32 },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -2243,7 +2244,7 @@ fn wrap_text(
 
 enum FontMetrics {
     Builtin(&'static [f32; 256]),
-    External(Vec<u8>),
+    External { bytes: Vec<u8>, face_index: u32 },
 }
 
 impl FontMetrics {
@@ -2256,12 +2257,10 @@ impl FontMetrics {
                     ))
                 })
             }
-            ResolvedFont::External(path) => fs::read(path).map(Self::External).map_err(|error| {
-                ElementLayoutError::InvalidLayout(format!(
-                    "cannot read font asset {}: {error}",
-                    path.display()
-                ))
-            }),
+            ResolvedFont::External(path) => load_external_font_metrics(path, 0),
+            ResolvedFont::ExternalFace { path, face_index } => {
+                load_external_font_metrics(path, *face_index)
+            }
         }
     }
 
@@ -2280,8 +2279,8 @@ impl FontMetrics {
                     .sum::<f32>()
                     * font_size
             }
-            Self::External(bytes) => {
-                let Ok(face) = ttf_parser::Face::parse(bytes, 0) else {
+            Self::External { bytes, face_index } => {
+                let Ok(face) = ttf_parser::Face::parse(bytes, *face_index) else {
                     return value.chars().map(approximate_advance_em).sum::<f32>() * font_size;
                 };
                 let units_per_em = f32::from(face.units_per_em());
@@ -2298,6 +2297,20 @@ impl FontMetrics {
             }
         }
     }
+}
+
+fn load_external_font_metrics(
+    path: &Path,
+    face_index: u32,
+) -> Result<FontMetrics, ElementLayoutError> {
+    fs::read(path)
+        .map(|bytes| FontMetrics::External { bytes, face_index })
+        .map_err(|error| {
+            ElementLayoutError::InvalidLayout(format!(
+                "cannot read font asset {}: {error}",
+                path.display()
+            ))
+        })
 }
 
 fn builtin_font_widths(name: &str) -> Option<&'static [f32; 256]> {
@@ -2381,11 +2394,13 @@ fn resolve_font(
 ) -> Result<ResolvedFont, ElementLayoutError> {
     let name = requested.unwrap_or("helvetica");
     if let Some(family) = template.fonts.iter().find(|family| family.name == name) {
-        let source = font_variant(family, style)?;
-        return Ok(ResolvedFont::External(resolve_asset_path(
-            &options.asset_base,
-            source,
-        )));
+        let (source, face_index) = font_variant(family, style)?;
+        let path = resolve_asset_path(&options.asset_base, source);
+        return Ok(if face_index == 0 {
+            ResolvedFont::External(path)
+        } else {
+            ResolvedFont::ExternalFace { path, face_index }
+        });
     }
 
     builtin_font_variant(name, style)
@@ -2397,12 +2412,21 @@ fn resolve_font(
         })
 }
 
-fn font_variant(family: &FontFamily, style: FontStyle) -> Result<&str, ElementLayoutError> {
+fn font_variant(family: &FontFamily, style: FontStyle) -> Result<(&str, u32), ElementLayoutError> {
     let source = match style {
-        FontStyle::Regular => Some(family.regular.as_str()),
-        FontStyle::Bold => family.bold.as_deref(),
-        FontStyle::Italic => family.italic.as_deref(),
-        FontStyle::BoldItalic => family.bold_italic.as_deref(),
+        FontStyle::Regular => Some((family.regular.as_str(), family.regular_face_index)),
+        FontStyle::Bold => family
+            .bold
+            .as_deref()
+            .map(|source| (source, family.bold_face_index)),
+        FontStyle::Italic => family
+            .italic
+            .as_deref()
+            .map(|source| (source, family.italic_face_index)),
+        FontStyle::BoldItalic => family
+            .bold_italic
+            .as_deref()
+            .map(|source| (source, family.bold_italic_face_index)),
     };
     source.ok_or_else(|| {
         ElementLayoutError::InvalidLayout(format!(
@@ -2583,14 +2607,15 @@ mod tests {
 
     use print_forge_dataset::DataRow;
     use print_forge_template::{
-        Color, Element, FlowOverflow, TableDateStyle, TableValueFormat, Template, TextAlign,
-        TextOverflow,
+        Color, Element, FlowOverflow, FontFamily, FontStyle, TableDateStyle, TableValueFormat,
+        Template, TextAlign, TextOverflow,
     };
     use serde_json::json;
 
     use super::{
         BasicLayoutEngine, DrawCommand, ElementLayoutError, FontMetrics, LayoutEngine, LayoutError,
-        LayoutOptions, Rect, ResolvedFont, TextLayoutSpec, format_table_value, layout_text,
+        LayoutOptions, Rect, ResolvedFont, TextLayoutSpec, font_variant, format_table_value,
+        layout_text,
     };
 
     const TEMPLATE: &str = r##"
@@ -2616,6 +2641,30 @@ mod tests {
           }]
         }
     "##;
+
+    #[test]
+    fn custom_font_variants_preserve_collection_face_indexes() {
+        let family = FontFamily {
+            name: "Collection".to_owned(),
+            regular: "collection.ttc".to_owned(),
+            regular_face_index: 1,
+            bold: Some("collection.ttc".to_owned()),
+            bold_face_index: 3,
+            italic: None,
+            italic_face_index: 0,
+            bold_italic: None,
+            bold_italic_face_index: 0,
+        };
+
+        assert_eq!(
+            font_variant(&family, FontStyle::Regular).unwrap(),
+            ("collection.ttc", 1)
+        );
+        assert_eq!(
+            font_variant(&family, FontStyle::Bold).unwrap(),
+            ("collection.ttc", 3)
+        );
+    }
 
     #[test]
     fn resolves_nested_variables_into_draw_commands() {

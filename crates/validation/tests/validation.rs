@@ -242,7 +242,7 @@ fn rejects_invalid_font_and_text_layout_settings() {
           },
           "fonts": [
             { "name": "Fixture", "regular": "" },
-            { "name": "Fixture", "regular": "font.ttf" }
+            { "name": "Fixture", "regular": "font.ttf", "italic_face_index": 2 }
           ],
           "pages": [{
             "elements": [{
@@ -267,6 +267,7 @@ fn rejects_invalid_font_and_text_layout_settings() {
 
     assert!(codes.contains(&"font.empty_source"));
     assert!(codes.contains(&"font.duplicate_name"));
+    assert!(codes.contains(&"font.orphan_face_index"));
     assert!(codes.contains(&"value.not_positive"));
     assert!(codes.contains(&"text.invalid_min_font_size"));
 }
