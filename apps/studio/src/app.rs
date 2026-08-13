@@ -334,31 +334,39 @@ impl StudioApp {
         let persisted = creation
             .storage
             .and_then(|storage| eframe::get_value::<PersistedState>(storage, APP_STATE_KEY));
-        let (template, current_path, current_page, preview_data, guides, show_guides, snap_enabled) =
-            persisted.map_or_else(
-                || {
-                    (
-                        starter_template(),
-                        None,
-                        0,
-                        "{}".to_owned(),
-                        vec![Vec::new()],
-                        true,
-                        true,
-                    )
-                },
-                |state| {
-                    (
-                        state.template,
-                        state.current_path,
-                        state.current_page,
-                        state.preview_data,
-                        state.guides,
-                        state.show_guides,
-                        state.snap_enabled,
-                    )
-                },
-            );
+        let (
+            mut template,
+            current_path,
+            current_page,
+            preview_data,
+            guides,
+            show_guides,
+            snap_enabled,
+        ) = persisted.map_or_else(
+            || {
+                (
+                    starter_template(),
+                    None,
+                    0,
+                    "{}".to_owned(),
+                    vec![Vec::new()],
+                    true,
+                    true,
+                )
+            },
+            |state| {
+                (
+                    state.template,
+                    state.current_path,
+                    state.current_page,
+                    state.preview_data,
+                    state.guides,
+                    state.show_guides,
+                    state.snap_enabled,
+                )
+            },
+        );
+        ensure_editable_page(&mut template);
 
         let saved_template = template.clone();
         let mut app = Self {
@@ -429,9 +437,11 @@ impl StudioApp {
             .and_then(|json| {
                 serde_json::from_str::<Template>(&json).map_err(|error| error.to_string())
             }) {
-            Ok(template) => {
+            Ok(mut template) => {
+                let saved_template = template.clone();
+                let repaired_empty_template = ensure_editable_page(&mut template);
                 self.template = template;
-                self.saved_template = self.template.clone();
+                self.saved_template = saved_template;
                 self.current_path = Some(path.clone());
                 self.current_page = 0;
                 self.preview_page = 0;
@@ -441,12 +451,22 @@ impl StudioApp {
                 self.guide_draft = None;
                 self.asset_cache.textures.clear();
                 self.selection = Selection::Document;
-                self.dirty = false;
+                self.dirty = repaired_empty_template;
                 self.reset_history();
-                self.set_notice(
-                    NoticeKind::Success,
-                    format!("Opened {}", display_name(&path)),
-                );
+                if repaired_empty_template {
+                    self.set_notice(
+                        NoticeKind::Info,
+                        format!(
+                            "Opened {} and added a blank page because the template had no pages",
+                            display_name(&path)
+                        ),
+                    );
+                } else {
+                    self.set_notice(
+                        NoticeKind::Success,
+                        format!("Opened {}", display_name(&path)),
+                    );
+                }
             }
             Err(error) => self.set_notice(NoticeKind::Error, format!("Open failed: {error}")),
         }
@@ -2252,12 +2272,15 @@ impl StudioApp {
         self.show_json = open;
         if apply {
             match serde_json::from_str::<Template>(&self.json_buffer) {
-                Ok(template) => {
+                Ok(mut template) => {
+                    ensure_editable_page(&mut template);
                     self.template = template;
                     self.current_page = self
                         .current_page
                         .min(self.template.pages.len().saturating_sub(1));
                     self.preview_page = 0;
+                    self.guides.resize_with(self.template.pages.len(), Vec::new);
+                    self.guides.truncate(self.template.pages.len());
                     self.asset_cache.textures.clear();
                     self.selection = Selection::Document;
                     self.dirty = true;
@@ -2405,13 +2428,10 @@ impl StudioApp {
 
 impl eframe::App for StudioApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        ensure_editable_page(&mut self.template);
         self.current_page = self
             .current_page
             .min(self.template.pages.len().saturating_sub(1));
-        if self.template.pages.is_empty() {
-            self.template.pages.push(blank_page());
-            self.current_page = 0;
-        }
         self.guides.resize_with(self.template.pages.len(), Vec::new);
         self.guides.truncate(self.template.pages.len());
         self.handle_shortcuts(ctx);
@@ -4671,6 +4691,15 @@ fn serialize_template(template: &Template) -> Result<String, String> {
     Ok(json)
 }
 
+fn ensure_editable_page(template: &mut Template) -> bool {
+    if template.pages.is_empty() {
+        template.pages.push(blank_page());
+        true
+    } else {
+        false
+    }
+}
+
 fn is_project_manifest(path: &Path) -> bool {
     path.file_name()
         .is_some_and(|name| name == PROJECT_MANIFEST)
@@ -4741,9 +4770,10 @@ mod tests {
     use super::{
         EditHistory, EditSnapshot, EditorGuide, ElementDragKind, ElementDragState, GuideAxis,
         PersistedState, PreviewErrorCopy, ScreenTransform, Selection, aligned_preview_text_origin,
-        alignment_targets, first_template_variable, guide_position_from_pointer,
-        inverse_rotate_vector, parse_color, preview_error_copy, print_color, push_editor_guide,
-        remap_selection_after_layer_move, resolve_preview, rgb_hex, safe_stem, serialize_template,
+        alignment_targets, ensure_editable_page, first_template_variable,
+        guide_position_from_pointer, inverse_rotate_vector, parse_color, preview_error_copy,
+        print_color, push_editor_guide, remap_selection_after_layer_move, resolve_preview, rgb_hex,
+        safe_stem, serialize_template,
     };
     use crate::model::{ElementKind, new_element, starter_template};
 
@@ -4753,6 +4783,17 @@ mod tests {
         let json = serialize_template(&template).unwrap();
         assert!(json.ends_with('\n'));
         assert_eq!(template, serde_json::from_str(&json).unwrap());
+    }
+
+    #[test]
+    fn empty_templates_receive_an_editable_page_before_ui_rendering() {
+        let mut template = starter_template();
+        template.pages.clear();
+
+        assert!(ensure_editable_page(&mut template));
+        assert_eq!(template.pages.len(), 1);
+        assert!(!ensure_editable_page(&mut template));
+        assert_eq!(template.pages.len(), 1);
     }
 
     #[test]
