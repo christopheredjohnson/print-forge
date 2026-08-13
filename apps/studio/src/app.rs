@@ -8,14 +8,14 @@ use std::{
 };
 
 use eframe::egui::{
-    self, Align, Align2, Color32, ComboBox, CornerRadius, FontId, Frame, Id, Key, Layout, Margin,
-    Pos2, Rect, RichText, ScrollArea, Sense, Stroke, StrokeKind, TextureHandle, TextureOptions,
-    Vec2,
+    self, Align, Align2, Color32, ComboBox, CornerRadius, FontData, FontDefinitions,
+    FontFamily as EguiFontFamily, FontId, Frame, Id, Key, Layout, Margin, Pos2, Rect, RichText,
+    ScrollArea, Sense, Stroke, StrokeKind, TextureHandle, TextureOptions, Vec2,
 };
 use print_forge_dataset::DataRow;
 use print_forge_engine::{
     BasicLayoutEngine, DrawCommand, ElementLayoutError, LayoutError, LayoutOptions, LineDash,
-    ResolvedDocument, ResolvedPage,
+    ResolvedDocument, ResolvedFont, ResolvedPage,
 };
 use print_forge_pdf::{PdfRenderOptions, PdfRenderer};
 use print_forge_template::{
@@ -319,6 +319,7 @@ pub struct StudioApp {
     canvas_mode: CanvasMode,
     preview_page: usize,
     asset_cache: AssetCache,
+    preview_font_signature: Vec<(PathBuf, u64, Option<std::time::SystemTime>)>,
     guides: Vec<Vec<EditorGuide>>,
     show_guides: bool,
     snap_enabled: bool,
@@ -389,6 +390,7 @@ impl StudioApp {
             canvas_mode: CanvasMode::Design,
             preview_page: 0,
             asset_cache: AssetCache::default(),
+            preview_font_signature: Vec::new(),
             guides,
             show_guides,
             snap_enabled,
@@ -397,6 +399,7 @@ impl StudioApp {
             guide_draft: None,
             history: EditHistory::default(),
         };
+        app.sync_preview_fonts(&creation.egui_ctx);
         app.reset_history();
         app
     }
@@ -637,6 +640,51 @@ impl StudioApp {
             .and_then(Path::parent)
             .unwrap_or_else(|| Path::new("."))
             .to_owned()
+    }
+
+    fn sync_preview_fonts(&mut self, ctx: &egui::Context) {
+        let asset_base = self.asset_base();
+        let mut sources = self
+            .template
+            .fonts
+            .iter()
+            .flat_map(|family| {
+                [
+                    Some(family.regular.as_str()),
+                    family.bold.as_deref(),
+                    family.italic.as_deref(),
+                    family.bold_italic.as_deref(),
+                ]
+                .into_iter()
+                .flatten()
+            })
+            .map(|source| {
+                let source = Path::new(source);
+                if source.is_absolute() {
+                    source.to_owned()
+                } else {
+                    asset_base.join(source)
+                }
+            })
+            .collect::<Vec<_>>();
+        sources.sort();
+        sources.dedup();
+        let signature = sources
+            .iter()
+            .map(|source| {
+                let metadata = fs::metadata(source).ok();
+                (
+                    source.clone(),
+                    metadata.as_ref().map_or(0, std::fs::Metadata::len),
+                    metadata.and_then(|metadata| metadata.modified().ok()),
+                )
+            })
+            .collect::<Vec<_>>();
+        if signature == self.preview_font_signature {
+            return;
+        }
+        configure_preview_fonts(ctx, &sources);
+        self.preview_font_signature = signature;
     }
 
     fn project_root(&self) -> Option<PathBuf> {
@@ -1874,6 +1922,7 @@ impl StudioApp {
                                 ui.checkbox(&mut self.print_ready_preview, "PDF/X export");
                                 if ui.small_button("Refresh assets").clicked() {
                                     self.asset_cache.textures.clear();
+                                    self.preview_font_signature.clear();
                                 }
                             });
                         });
@@ -2436,6 +2485,7 @@ impl eframe::App for StudioApp {
         self.guides.truncate(self.template.pages.len());
         self.handle_shortcuts(ctx);
         self.show_toolbar(ctx);
+        self.sync_preview_fonts(ctx);
         self.show_left_panel(ctx);
         self.show_right_panel(ctx);
         self.show_canvas(ctx);
@@ -2683,7 +2733,7 @@ fn paint_resolved_page(
                 } else {
                     painter.clone()
                 };
-                let font = FontId::proportional((text.font_size_pt * scale).max(1.0));
+                let font = preview_font_id(ctx, &text.font, (text.font_size_pt * scale).max(1.0));
                 let color = print_color(text.color);
                 for line in &text.lines {
                     let baseline = page_point(page, scale, line.x, line.y);
@@ -2902,6 +2952,50 @@ fn aligned_preview_text_origin(
         TextAlign::Left | TextAlign::Justify => 0.0,
     };
     baseline + Vec2::new(x_offset, -baseline_offset)
+}
+
+fn preview_font_id(ctx: &egui::Context, font: &ResolvedFont, size: f32) -> FontId {
+    let family = preview_font_family(font);
+    let available = ctx.fonts(|fonts| fonts.families().contains(&family));
+    if available {
+        FontId::new(size, family)
+    } else if matches!(font, ResolvedFont::Builtin(name) if name.starts_with("courier")) {
+        FontId::monospace(size)
+    } else {
+        FontId::proportional(size)
+    }
+}
+
+fn preview_font_family(font: &ResolvedFont) -> EguiFontFamily {
+    match font {
+        ResolvedFont::Builtin(name) => builtin_preview_font_name(name).map_or_else(
+            || {
+                if name.starts_with("courier") {
+                    EguiFontFamily::Monospace
+                } else {
+                    EguiFontFamily::Proportional
+                }
+            },
+            |name| EguiFontFamily::Name(name.into()),
+        ),
+        ResolvedFont::External(path) => {
+            EguiFontFamily::Name(external_preview_font_name(path).into())
+        }
+    }
+}
+
+const fn builtin_preview_font_name(name: &str) -> Option<&'static str> {
+    match name.as_bytes() {
+        b"helvetica" | b"sans-serif" => Some("print-forge-preview-helvetica"),
+        b"helvetica-bold" => Some("print-forge-preview-helvetica-bold"),
+        b"helvetica-oblique" => Some("print-forge-preview-helvetica-oblique"),
+        b"helvetica-bold-oblique" => Some("print-forge-preview-helvetica-bold-oblique"),
+        _ => None,
+    }
+}
+
+fn external_preview_font_name(path: &Path) -> String {
+    format!("print-forge-preview:{}", path.to_string_lossy())
 }
 
 fn galley_baseline_offset(galley: &egui::Galley) -> f32 {
@@ -4757,14 +4851,74 @@ fn configure_style(ctx: &egui::Context) {
     style.spacing.item_spacing = Vec2::new(8.0, 7.0);
     style.spacing.button_padding = Vec2::new(10.0, 6.0);
     ctx.set_style(style);
+    configure_preview_fonts(ctx, &[]);
+}
+
+fn configure_preview_fonts(ctx: &egui::Context, external_sources: &[PathBuf]) {
+    let mut definitions = FontDefinitions::default();
+    bind_preview_font(
+        &mut definitions,
+        "print-forge-preview-helvetica",
+        FontData::from_static(include_bytes!(
+            "../../../crates/pdf/assets/fonts/Helvetica.ttf"
+        )),
+    );
+    bind_preview_font(
+        &mut definitions,
+        "print-forge-preview-helvetica-bold",
+        FontData::from_static(include_bytes!(
+            "../../../crates/pdf/assets/fonts/Helvetica-Bold.ttf"
+        )),
+    );
+    bind_preview_font(
+        &mut definitions,
+        "print-forge-preview-helvetica-oblique",
+        FontData::from_static(include_bytes!(
+            "../../../crates/pdf/assets/fonts/Helvetica-Oblique.ttf"
+        )),
+    );
+    bind_preview_font(
+        &mut definitions,
+        "print-forge-preview-helvetica-bold-oblique",
+        FontData::from_static(include_bytes!(
+            "../../../crates/pdf/assets/fonts/Helvetica-BoldOblique.ttf"
+        )),
+    );
+    for source in external_sources {
+        let Ok(bytes) = fs::read(source) else {
+            continue;
+        };
+        if ttf_parser::Face::parse(&bytes, 0).is_err() {
+            continue;
+        }
+        bind_preview_font(
+            &mut definitions,
+            &external_preview_font_name(source),
+            FontData::from_owned(bytes),
+        );
+    }
+    ctx.set_fonts(definitions);
+}
+
+fn bind_preview_font(definitions: &mut FontDefinitions, name: &str, data: FontData) {
+    let mut family_fonts = vec![name.to_owned()];
+    if let Some(fallbacks) = definitions.families.get(&EguiFontFamily::Proportional) {
+        family_fonts.extend(fallbacks.iter().cloned());
+    }
+    definitions
+        .font_data
+        .insert(name.to_owned(), Arc::new(data));
+    definitions
+        .families
+        .insert(EguiFontFamily::Name(name.into()), family_fonts);
 }
 
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
 
-    use eframe::egui::{Color32, Pos2, Vec2};
-    use print_forge_engine::DrawCommand;
+    use eframe::egui::{Color32, FontFamily as EguiFontFamily, Pos2, Vec2};
+    use print_forge_engine::{DrawCommand, ResolvedFont};
     use print_forge_template::{Color as PrintColor, Element, TextAlign};
 
     use super::{
@@ -4772,8 +4926,8 @@ mod tests {
         PersistedState, PreviewErrorCopy, ScreenTransform, Selection, aligned_preview_text_origin,
         alignment_targets, ensure_editable_page, first_template_variable,
         guide_position_from_pointer, inverse_rotate_vector, parse_color, preview_error_copy,
-        print_color, push_editor_guide, remap_selection_after_layer_move, resolve_preview, rgb_hex,
-        safe_stem, serialize_template,
+        preview_font_family, print_color, push_editor_guide, remap_selection_after_layer_move,
+        resolve_preview, rgb_hex, safe_stem, serialize_template,
     };
     use crate::model::{ElementKind, new_element, starter_template};
 
@@ -4880,6 +5034,34 @@ mod tests {
         assert_eq!(
             aligned_preview_text_origin(baseline, 100.0, 80.0, 15.0, TextAlign::Right),
             Pos2::new(120.0, 65.0)
+        );
+    }
+
+    #[test]
+    fn preview_font_mapping_preserves_builtin_styles_and_external_faces() {
+        let family = |name: &str| preview_font_family(&ResolvedFont::Builtin(name.to_owned()));
+
+        assert_eq!(
+            family("helvetica"),
+            EguiFontFamily::Name("print-forge-preview-helvetica".into())
+        );
+        assert_eq!(
+            family("helvetica-bold"),
+            EguiFontFamily::Name("print-forge-preview-helvetica-bold".into())
+        );
+        assert_eq!(
+            family("helvetica-oblique"),
+            EguiFontFamily::Name("print-forge-preview-helvetica-oblique".into())
+        );
+        assert_eq!(
+            family("helvetica-bold-oblique"),
+            EguiFontFamily::Name("print-forge-preview-helvetica-bold-oblique".into())
+        );
+        assert_eq!(
+            preview_font_family(&ResolvedFont::External(PathBuf::from(
+                "/tmp/Example-Bold.ttf"
+            ))),
+            EguiFontFamily::Name("print-forge-preview:/tmp/Example-Bold.ttf".into())
         );
     }
 
