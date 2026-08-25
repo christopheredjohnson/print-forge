@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/brand/print-forge-logo.png" alt="Print Forge logo" width="720">
+  <img src="assets/brand/print-forge-logo.png" alt="Print Forge document and anvil logo" width="240">
 </p>
 
 # Print Forge
