@@ -305,6 +305,7 @@ impl Deref for ResolvedPreview {
 }
 
 pub struct StudioApp {
+    brand_texture: TextureHandle,
     template: Template,
     saved_template: Template,
     current_path: Option<PathBuf>,
@@ -376,9 +377,11 @@ impl StudioApp {
         ensure_editable_page(&mut template);
         let system_font_catalog = SystemFontCatalog::load();
         let system_preview_fonts = system_font_catalog.builtin_preview_faces();
+        let brand_texture = crate::brand::logo_texture(&creation.egui_ctx);
 
         let saved_template = template.clone();
         let mut app = Self {
+            brand_texture,
             template,
             saved_template,
             current_path,
@@ -1221,7 +1224,16 @@ impl StudioApp {
             )
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("◆").color(ORANGE).size(25.0).strong());
+                    Frame::new()
+                        .fill(CREAM)
+                        .corner_radius(CornerRadius::same(4))
+                        .inner_margin(Margin::same(3))
+                        .show(ui, |ui| {
+                            ui.add(
+                                egui::Image::new(&self.brand_texture)
+                                    .fit_to_exact_size(Vec2::splat(32.0)),
+                            );
+                        });
                     ui.vertical(|ui| {
                         ui.label(
                             RichText::new("PRINT FORGE")
