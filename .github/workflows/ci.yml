@@ -36,7 +36,10 @@ jobs:
       - name: Render representative fixtures
         run: |
           mkdir -p target/ci
-          cargo run -- render examples/absolute-layout.json examples/absolute-layout-data.json target/ci/absolute-layout.pdf
-          cargo run -- render examples/table-invoice.json examples/table-invoice-data.json target/ci/table-invoice.pdf
-          cargo run -- render examples/specialty-elements.json examples/specialty-elements-data.json target/ci/specialty-elements.pdf
-          cargo run -- render examples/product-catalog.json examples/product-catalog-data.json target/ci/product-catalog.pdf
+          cargo run -- render examples/absolute-layout examples/absolute-layout/data.json target/ci/absolute-layout.pdf
+          cargo run -- render examples/table-invoice examples/table-invoice/data.json target/ci/table-invoice.pdf
+          cargo run -- render examples/specialty-elements examples/specialty-elements/data.json target/ci/specialty-elements.pdf
+          cargo run -- render examples/product-catalog examples/product-catalog/data.json target/ci/product-catalog.pdf
+          cargo run -- inspect-data examples/large-dataset/data.csv
+          cargo run -- validate examples/large-dataset --dataset examples/large-dataset/data.csv
+          cargo run -- render examples/large-dataset examples/large-dataset/data.csv target/ci/large-dataset.pdf --rows 1-25

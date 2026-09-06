@@ -188,6 +188,14 @@ cargo run -- render examples/business-card examples/business-card/data.csv \
   --rows 1-2 \
   --continue-on-error
 
+# Inspect all 10,000 rows in the large-dataset fixture, then render a slice.
+cargo run -- inspect-data examples/large-dataset/data.csv
+cargo run -- render examples/large-dataset examples/large-dataset/data.csv \
+  output/pdf/large-dataset-sample \
+  --output-mode separate \
+  --output-name '{{record_id}}' \
+  --rows 1-25
+
 # Apply the complete print-ready preset.
 cargo run -- render examples/business-card examples/business-card/data.csv \
   output/pdf/business-cards-print-ready.pdf \

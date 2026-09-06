@@ -1,0 +1,256 @@
+{
+  "schema_version": 1,
+  "name": "Large Dataset Fulfillment Labels",
+  "document": {
+    "width": { "value": 6, "unit": "inches" },
+    "height": { "value": 4, "unit": "inches" },
+    "metadata": {
+      "title": "Large Dataset Fulfillment Labels",
+      "author": "Print Forge",
+      "subject": "High-volume variable-data rendering example",
+      "keywords": ["large dataset", "fulfillment", "labels", "variable data"]
+    }
+  },
+  "fields": [
+    { "name": "record_id", "field_type": "text", "required": true },
+    { "name": "first_name", "field_type": "text", "required": true },
+    { "name": "last_name", "field_type": "text", "required": true },
+    { "name": "company", "field_type": "text", "required": true },
+    { "name": "street", "field_type": "text", "required": true },
+    { "name": "city", "field_type": "text", "required": true },
+    { "name": "state", "field_type": "text", "required": true },
+    { "name": "postal_code", "field_type": "text", "required": true },
+    { "name": "service", "field_type": "text", "required": true },
+    { "name": "tracking_code", "field_type": "text", "required": true },
+    { "name": "campaign_url", "field_type": "text", "required": true }
+  ],
+  "pages": [
+    {
+      "elements": [
+        {
+          "type": "rectangle",
+          "position": {
+            "x": { "value": 0, "unit": "points" },
+            "y": { "value": 238, "unit": "points" },
+            "width": { "value": 432, "unit": "points" },
+            "height": { "value": 50, "unit": "points" }
+          },
+          "fill": "#1F2429"
+        },
+        {
+          "type": "text",
+          "position": {
+            "x": { "value": 24, "unit": "points" },
+            "y": { "value": 258, "unit": "points" },
+            "width": { "value": 240, "unit": "points" },
+            "height": { "value": 18, "unit": "points" }
+          },
+          "value": "PRINT FORGE / FULFILLMENT",
+          "font": "Helvetica",
+          "font_style": "bold",
+          "font_size": { "value": 14, "unit": "points" },
+          "color": "#FAF7EF"
+        },
+        {
+          "type": "text",
+          "position": {
+            "x": { "value": 300, "unit": "points" },
+            "y": { "value": 259, "unit": "points" },
+            "width": { "value": 108, "unit": "points" },
+            "height": { "value": 16, "unit": "points" }
+          },
+          "value": "{{record_id}}",
+          "font": "Helvetica",
+          "font_style": "bold",
+          "font_size": { "value": 11, "unit": "points" },
+          "align": "right",
+          "color": "#F45B20"
+        },
+        {
+          "type": "text",
+          "position": {
+            "x": { "value": 24, "unit": "points" },
+            "y": { "value": 216, "unit": "points" },
+            "width": { "value": 270, "unit": "points" },
+            "height": { "value": 10, "unit": "points" }
+          },
+          "value": "SHIP TO",
+          "font": "Helvetica",
+          "font_style": "bold",
+          "font_size": { "value": 7, "unit": "points" },
+          "color": "#F45B20"
+        },
+        {
+          "type": "text",
+          "position": {
+            "x": { "value": 24, "unit": "points" },
+            "y": { "value": 188, "unit": "points" },
+            "width": { "value": 270, "unit": "points" },
+            "height": { "value": 24, "unit": "points" }
+          },
+          "value": "{{first_name}} {{last_name}}",
+          "font": "Helvetica",
+          "font_style": "bold",
+          "font_size": { "value": 19, "unit": "points" },
+          "overflow": "shrink",
+          "color": "#1F2429"
+        },
+        {
+          "type": "text",
+          "position": {
+            "x": { "value": 24, "unit": "points" },
+            "y": { "value": 169, "unit": "points" },
+            "width": { "value": 270, "unit": "points" },
+            "height": { "value": 14, "unit": "points" }
+          },
+          "value": "{{company}}",
+          "font": "Helvetica",
+          "font_size": { "value": 10, "unit": "points" },
+          "overflow": "shrink",
+          "color": "#52616B"
+        },
+        {
+          "type": "text",
+          "position": {
+            "x": { "value": 24, "unit": "points" },
+            "y": { "value": 142, "unit": "points" },
+            "width": { "value": 270, "unit": "points" },
+            "height": { "value": 16, "unit": "points" }
+          },
+          "value": "{{street}}",
+          "font": "Helvetica",
+          "font_size": { "value": 11, "unit": "points" },
+          "overflow": "shrink",
+          "color": "#1F2429"
+        },
+        {
+          "type": "text",
+          "position": {
+            "x": { "value": 24, "unit": "points" },
+            "y": { "value": 122, "unit": "points" },
+            "width": { "value": 270, "unit": "points" },
+            "height": { "value": 16, "unit": "points" }
+          },
+          "value": "{{city}}, {{state}} {{postal_code}}",
+          "font": "Helvetica",
+          "font_size": { "value": 11, "unit": "points" },
+          "overflow": "shrink",
+          "color": "#1F2429"
+        },
+        {
+          "type": "qr_code",
+          "position": {
+            "x": { "value": 330, "unit": "points" },
+            "y": { "value": 137, "unit": "points" },
+            "width": { "value": 78, "unit": "points" },
+            "height": { "value": 78, "unit": "points" }
+          },
+          "value": "{{campaign_url}}",
+          "error_correction": "medium",
+          "quiet_zone": 4,
+          "color": "#1F2429",
+          "background": "#FFFFFF"
+        },
+        {
+          "type": "text",
+          "position": {
+            "x": { "value": 330, "unit": "points" },
+            "y": { "value": 122, "unit": "points" },
+            "width": { "value": 78, "unit": "points" },
+            "height": { "value": 9, "unit": "points" }
+          },
+          "value": "ORDER DETAILS",
+          "font": "Helvetica",
+          "font_style": "bold",
+          "font_size": { "value": 6, "unit": "points" },
+          "align": "center",
+          "color": "#52616B"
+        },
+        {
+          "type": "line",
+          "x1": { "value": 24, "unit": "points" },
+          "y1": { "value": 110, "unit": "points" },
+          "x2": { "value": 408, "unit": "points" },
+          "y2": { "value": 110, "unit": "points" },
+          "width": { "value": 0.75, "unit": "points" },
+          "color": "#CCD4D9"
+        },
+        {
+          "type": "barcode",
+          "position": {
+            "x": { "value": 24, "unit": "points" },
+            "y": { "value": 45, "unit": "points" },
+            "width": { "value": 270, "unit": "points" },
+            "height": { "value": 52, "unit": "points" }
+          },
+          "value": "{{tracking_code}}",
+          "format": "code128",
+          "quiet_zone": 10,
+          "color": "#1F2429",
+          "background": "#FFFFFF"
+        },
+        {
+          "type": "text",
+          "position": {
+            "x": { "value": 24, "unit": "points" },
+            "y": { "value": 26, "unit": "points" },
+            "width": { "value": 270, "unit": "points" },
+            "height": { "value": 12, "unit": "points" }
+          },
+          "value": "{{tracking_code}}",
+          "font": "Courier",
+          "font_style": "bold",
+          "font_size": { "value": 9, "unit": "points" },
+          "align": "center",
+          "color": "#1F2429"
+        },
+        {
+          "type": "rectangle",
+          "position": {
+            "x": { "value": 318, "unit": "points" },
+            "y": { "value": 24, "unit": "points" },
+            "width": { "value": 90, "unit": "points" },
+            "height": { "value": 74, "unit": "points" }
+          },
+          "fill": "#FFF2EB",
+          "stroke": {
+            "width": { "value": 1, "unit": "points" },
+            "color": "#F45B20"
+          }
+        },
+        {
+          "type": "text",
+          "position": {
+            "x": { "value": 326, "unit": "points" },
+            "y": { "value": 70, "unit": "points" },
+            "width": { "value": 74, "unit": "points" },
+            "height": { "value": 15, "unit": "points" }
+          },
+          "value": "{{service}}",
+          "font": "Helvetica",
+          "font_style": "bold",
+          "font_size": { "value": 10, "unit": "points" },
+          "align": "center",
+          "overflow": "shrink",
+          "color": "#F45B20"
+        },
+        {
+          "type": "text",
+          "position": {
+            "x": { "value": 326, "unit": "points" },
+            "y": { "value": 43, "unit": "points" },
+            "width": { "value": 74, "unit": "points" },
+            "height": { "value": 18, "unit": "points" }
+          },
+          "value": "BATCH\n10K",
+          "font": "Helvetica",
+          "font_style": "bold",
+          "font_size": { "value": 7, "unit": "points" },
+          "line_height": { "value": 9, "unit": "points" },
+          "align": "center",
+          "color": "#52616B"
+        }
+      ]
+    }
+  ]
+}
