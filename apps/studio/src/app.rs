@@ -55,6 +55,10 @@ enum Selection {
     Page,
     Field(usize),
     Element(usize),
+    NestedElement {
+        root: usize,
+        path: Vec<usize>,
+    },
     Elements {
         indices: BTreeSet<usize>,
         primary: usize,
@@ -79,10 +83,96 @@ fn remap_selection_after_layer_move(selection: &Selection, from: usize, to: usiz
             indices: indices.iter().map(|index| remap(*index)).collect(),
             primary: remap(*primary),
         },
+        Selection::NestedElement { root, path } => Selection::NestedElement {
+            root: remap(*root),
+            path: path.clone(),
+        },
         Selection::Document => Selection::Document,
         Selection::Page => Selection::Page,
         Selection::Field(index) => Selection::Field(*index),
     }
+}
+
+fn element_at_path<'a>(element: &'a Element, path: &[usize]) -> Option<&'a Element> {
+    let Some((&index, remainder)) = path.split_first() else {
+        return Some(element);
+    };
+    let child = match element {
+        Element::Group(group) => group.children.get(index),
+        Element::Stack(stack) => stack.children.get(index),
+        Element::Repeater(repeater) if index == 0 => Some(repeater.template.as_ref()),
+        _ => None,
+    }?;
+    element_at_path(child, remainder)
+}
+
+fn element_at_path_mut<'a>(element: &'a mut Element, path: &[usize]) -> Option<&'a mut Element> {
+    let Some((&index, remainder)) = path.split_first() else {
+        return Some(element);
+    };
+    let child = match element {
+        Element::Group(group) => group.children.get_mut(index),
+        Element::Stack(stack) => stack.children.get_mut(index),
+        Element::Repeater(repeater) if index == 0 => Some(repeater.template.as_mut()),
+        _ => None,
+    }?;
+    element_at_path_mut(child, remainder)
+}
+
+fn duplicate_nested_element(element: &mut Element, path: &[usize]) -> bool {
+    let Some((&index, parent_path)) = path.split_last() else {
+        return false;
+    };
+    let Some(parent) = element_at_path_mut(element, parent_path) else {
+        return false;
+    };
+    let children = match parent {
+        Element::Group(group) => &mut group.children,
+        Element::Stack(stack) => &mut stack.children,
+        _ => return false,
+    };
+    let Some(duplicate) = children.get(index).cloned() else {
+        return false;
+    };
+    children.insert(index + 1, duplicate);
+    true
+}
+
+fn remove_nested_element(element: &mut Element, path: &[usize]) -> bool {
+    let Some((&index, parent_path)) = path.split_last() else {
+        return false;
+    };
+    let Some(parent) = element_at_path_mut(element, parent_path) else {
+        return false;
+    };
+    let children = match parent {
+        Element::Group(group) => &mut group.children,
+        Element::Stack(stack) => &mut stack.children,
+        _ => return false,
+    };
+    if index >= children.len() {
+        return false;
+    }
+    children.remove(index);
+    true
+}
+
+fn reorder_nested_element(element: &mut Element, path: &[usize], movement: LayerMove) -> bool {
+    let Some((&index, parent_path)) = path.split_last() else {
+        return false;
+    };
+    let Some(parent) = element_at_path_mut(element, parent_path) else {
+        return false;
+    };
+    let children = match parent {
+        Element::Group(group) => &mut group.children,
+        Element::Stack(stack) => &mut stack.children,
+        _ => return false,
+    };
+    if index >= children.len() {
+        return false;
+    }
+    reorder_element(children, index, movement) != index
 }
 
 #[derive(Serialize, Deserialize)]
@@ -1020,7 +1110,10 @@ impl StudioApp {
         match &self.selection {
             Selection::Element(index) => vec![*index],
             Selection::Elements { indices, .. } => indices.iter().copied().collect(),
-            Selection::Document | Selection::Page | Selection::Field(_) => Vec::new(),
+            Selection::Document
+            | Selection::Page
+            | Selection::Field(_)
+            | Selection::NestedElement { .. } => Vec::new(),
         }
     }
 
@@ -1040,6 +1133,7 @@ impl StudioApp {
         match &self.selection {
             Selection::Element(selected) => *selected == index,
             Selection::Elements { indices, .. } => indices.contains(&index),
+            Selection::NestedElement { root, .. } => *root == index,
             Selection::Document | Selection::Page | Selection::Field(_) => false,
         }
     }
@@ -1048,8 +1142,60 @@ impl StudioApp {
         match &self.selection {
             Selection::Element(selected) => *selected == index,
             Selection::Elements { primary, .. } => *primary == index,
+            Selection::NestedElement { root, .. } => *root == index,
             Selection::Document | Selection::Page | Selection::Field(_) => false,
         }
+    }
+
+    fn is_layer_path_selected(&self, root: usize, path: &[usize]) -> bool {
+        if path.is_empty() {
+            return matches!(
+                &self.selection,
+                Selection::Element(index) if *index == root
+            ) || matches!(
+                &self.selection,
+                Selection::Elements { indices, .. } if indices.contains(&root)
+            );
+        }
+        matches!(
+            &self.selection,
+            Selection::NestedElement {
+                root: selected_root,
+                path: selected_path,
+            } if *selected_root == root && selected_path == path
+        )
+    }
+
+    fn select_layer_path(&mut self, root: usize, path: &[usize], additive: bool) {
+        if path.is_empty() {
+            self.select_element(root, additive);
+        } else {
+            self.selection = Selection::NestedElement {
+                root,
+                path: path.to_vec(),
+            };
+            self.active_drag = None;
+        }
+    }
+
+    fn selected_nested_element(&self, root: usize, path: &[usize]) -> Option<&Element> {
+        let root = self
+            .template
+            .pages
+            .get(self.current_page)?
+            .elements
+            .get(root)?;
+        element_at_path(root, path)
+    }
+
+    fn selected_nested_element_mut(&mut self, root: usize, path: &[usize]) -> Option<&mut Element> {
+        let root = self
+            .template
+            .pages
+            .get_mut(self.current_page)?
+            .elements
+            .get_mut(root)?;
+        element_at_path_mut(root, path)
     }
 
     fn select_element(&mut self, index: usize, additive: bool) {
@@ -1098,6 +1244,40 @@ impl StudioApp {
     }
 
     fn duplicate_selection(&mut self) {
+        if let Selection::NestedElement { root, path } = self.selection.clone() {
+            let locked = self.nested_path_locked(root, &path);
+            if locked {
+                self.set_notice(
+                    NoticeKind::Info,
+                    "Unlock this nested layer before duplicating it",
+                );
+                return;
+            }
+            let Some(root_element) = self.template.pages[self.current_page]
+                .elements
+                .get_mut(root)
+            else {
+                self.selection = Selection::Page;
+                return;
+            };
+            if duplicate_nested_element(root_element, &path) {
+                let mut duplicate_path = path;
+                if let Some(index) = duplicate_path.last_mut() {
+                    *index += 1;
+                }
+                self.selection = Selection::NestedElement {
+                    root,
+                    path: duplicate_path,
+                };
+                self.dirty = true;
+            } else {
+                self.set_notice(
+                    NoticeKind::Info,
+                    "A repeater item template cannot be duplicated; duplicate children inside it instead",
+                );
+            }
+            return;
+        }
         let indices = self.editable_selected_element_indices();
         if indices.is_empty() {
             self.set_notice(NoticeKind::Info, "Unlock a layer before duplicating it");
@@ -1130,6 +1310,42 @@ impl StudioApp {
     }
 
     fn delete_selection(&mut self) {
+        if let Selection::NestedElement { root, path } = self.selection.clone() {
+            let locked = self.nested_path_locked(root, &path);
+            if locked {
+                self.set_notice(
+                    NoticeKind::Info,
+                    "Unlock this nested layer before deleting it",
+                );
+                return;
+            }
+            let parent_path = path[..path.len().saturating_sub(1)].to_vec();
+            let Some(root_element) = self.template.pages[self.current_page]
+                .elements
+                .get_mut(root)
+            else {
+                self.selection = Selection::Page;
+                return;
+            };
+            if remove_nested_element(root_element, &path) {
+                self.selection = if parent_path.is_empty() {
+                    Selection::Element(root)
+                } else {
+                    Selection::NestedElement {
+                        root,
+                        path: parent_path,
+                    }
+                };
+                self.active_drag = None;
+                self.dirty = true;
+            } else {
+                self.set_notice(
+                    NoticeKind::Info,
+                    "A repeater item template is required and cannot be deleted",
+                );
+            }
+            return;
+        }
         let mut indices = self.editable_selected_element_indices();
         if indices.is_empty() {
             self.set_notice(NoticeKind::Info, "Unlock a layer before deleting it");
@@ -1157,6 +1373,43 @@ impl StudioApp {
             return;
         }
         self.selection = remap_selection_after_layer_move(&self.selection, from, to);
+        self.active_drag = None;
+        self.dirty = true;
+    }
+
+    fn move_nested_layer(&mut self, root: usize, path: &[usize], movement: LayerMove) {
+        let Some(root_element) = self.template.pages[self.current_page]
+            .elements
+            .get_mut(root)
+        else {
+            self.selection = Selection::Page;
+            return;
+        };
+        let Some((&index, parent_path)) = path.split_last() else {
+            return;
+        };
+        let destination = match movement {
+            LayerMove::Back => 0,
+            LayerMove::Backward => index.saturating_sub(1),
+            LayerMove::Forward => index + 1,
+            LayerMove::Front => usize::MAX,
+        };
+        if !reorder_nested_element(root_element, path, movement) {
+            return;
+        }
+        let parent = element_at_path(root_element, parent_path);
+        let sibling_count = match parent {
+            Some(Element::Group(group)) => group.children.len(),
+            Some(Element::Stack(stack)) => stack.children.len(),
+            _ => 0,
+        };
+        let destination = destination.min(sibling_count.saturating_sub(1));
+        let mut updated_path = parent_path.to_vec();
+        updated_path.push(destination);
+        self.selection = Selection::NestedElement {
+            root,
+            path: updated_path,
+        };
         self.active_drag = None;
         self.dirty = true;
     }
@@ -1363,179 +1616,7 @@ impl StudioApp {
 
                     ui.add_space(16.0);
                     section_label(ui, "LAYERS");
-                    let layers = self.template.pages[self.current_page]
-                        .elements
-                        .iter()
-                        .enumerate()
-                        .map(|(index, element)| {
-                            (
-                                index,
-                                element_label(element, index),
-                                element.is_visible(),
-                                element.is_locked(),
-                            )
-                        })
-                        .collect::<Vec<_>>();
-                    let mut drop_target = None;
-                    for (index, label, visible, locked) in layers.into_iter().rev() {
-                        let selected = self.is_element_selected(index);
-                        let row = ui.horizontal(|ui| {
-                            let visibility = ui
-                                .add_sized(
-                                    [30.0, 22.0],
-                                    egui::Button::new(if visible { "VIS" } else { "HID" }),
-                                )
-                                .on_hover_text(if visible {
-                                    "Hide this layer"
-                                } else {
-                                    "Show this layer"
-                                });
-                            let lock = ui
-                                .add_sized(
-                                    [34.0, 22.0],
-                                    egui::Button::new(if locked { "LOCK" } else { "OPEN" }),
-                                )
-                                .on_hover_text(if locked {
-                                    "Unlock this layer"
-                                } else {
-                                    "Lock this layer"
-                                });
-                            let drag = ui
-                                .add(egui::Label::new("::").sense(if locked {
-                                    Sense::hover()
-                                } else {
-                                    Sense::drag()
-                                }))
-                                .on_hover_text(if locked {
-                                    "Unlock this layer to change paint order"
-                                } else {
-                                    "Drag to change paint order"
-                                });
-                            let text = RichText::new(label).color(if visible {
-                                Color32::from_gray(225)
-                            } else {
-                                Color32::from_gray(115)
-                            });
-                            let select = ui.selectable_label(selected, text);
-                            (visibility, lock, drag, select)
-                        });
-                        let (visibility, lock, drag, select) = row.inner;
-                        if visibility.clicked()
-                            && let Some(element) = self.template.pages[self.current_page]
-                                .elements
-                                .get_mut(index)
-                        {
-                            element.set_visible(!visible);
-                            self.dirty = true;
-                        }
-                        if lock.clicked()
-                            && let Some(element) = self.template.pages[self.current_page]
-                                .elements
-                                .get_mut(index)
-                        {
-                            element.set_locked(!locked);
-                            self.active_drag = None;
-                            self.dirty = true;
-                        }
-                        if select.clicked() {
-                            let additive = ui.input(|input| input.modifiers.shift);
-                            self.select_element(index, additive);
-                        }
-                        if drag.drag_started() {
-                            self.dragged_layer = Some(index);
-                        }
-                        if self.dragged_layer.is_some() && row.response.hovered() {
-                            drop_target = Some(index);
-                            ui.painter().rect_stroke(
-                                row.response.rect.expand(2.0),
-                                CornerRadius::same(2),
-                                Stroke::new(1.0_f32, ORANGE),
-                                StrokeKind::Outside,
-                            );
-                        }
-                    }
-                    if ui.input(|input| input.pointer.any_released()) {
-                        if let (Some(from), Some(to)) = (self.dragged_layer.take(), drop_target) {
-                            self.move_layer(from, to);
-                        } else {
-                            self.dragged_layer = None;
-                        }
-                    }
-                    if let Selection::Element(index) = self.selection.clone() {
-                        let layer_count = self.template.pages[self.current_page].elements.len();
-                        let selected_locked = self.template.pages[self.current_page]
-                            .elements
-                            .get(index)
-                            .is_some_and(Element::is_locked);
-                        ui.add_space(6.0);
-                        ui.horizontal(|ui| {
-                            if ui
-                                .add_enabled(
-                                    index > 0 && !selected_locked,
-                                    egui::Button::new("Back"),
-                                )
-                                .on_hover_text("Send behind every other layer")
-                                .clicked()
-                            {
-                                let selected = reorder_element(
-                                    &mut self.template.pages[self.current_page].elements,
-                                    index,
-                                    LayerMove::Back,
-                                );
-                                self.selection = Selection::Element(selected);
-                                self.dirty = true;
-                            }
-                            if ui
-                                .add_enabled(
-                                    index > 0 && !selected_locked,
-                                    egui::Button::new("Lower"),
-                                )
-                                .on_hover_text("Move backward one layer")
-                                .clicked()
-                            {
-                                let selected = reorder_element(
-                                    &mut self.template.pages[self.current_page].elements,
-                                    index,
-                                    LayerMove::Backward,
-                                );
-                                self.selection = Selection::Element(selected);
-                                self.dirty = true;
-                            }
-                            if ui
-                                .add_enabled(
-                                    index + 1 < layer_count && !selected_locked,
-                                    egui::Button::new("Raise"),
-                                )
-                                .on_hover_text("Move forward one layer")
-                                .clicked()
-                            {
-                                let selected = reorder_element(
-                                    &mut self.template.pages[self.current_page].elements,
-                                    index,
-                                    LayerMove::Forward,
-                                );
-                                self.selection = Selection::Element(selected);
-                                self.dirty = true;
-                            }
-                            if ui
-                                .add_enabled(
-                                    index + 1 < layer_count && !selected_locked,
-                                    egui::Button::new("Front"),
-                                )
-                                .on_hover_text("Bring in front of every other layer")
-                                .clicked()
-                            {
-                                let selected = reorder_element(
-                                    &mut self.template.pages[self.current_page].elements,
-                                    index,
-                                    LayerMove::Front,
-                                );
-                                self.selection = Selection::Element(selected);
-                                self.dirty = true;
-                            }
-                        });
-                        ui.small("Topmost layer paints in front.");
-                    }
+                    self.layers_tree(ui);
 
                     ui.add_space(16.0);
                     ui.horizontal(|ui| {
@@ -1644,6 +1725,362 @@ impl StudioApp {
         name
     }
 
+    fn layers_tree(&mut self, ui: &mut egui::Ui) {
+        let roots = self.template.pages[self.current_page].elements.clone();
+        if roots.is_empty() {
+            ui.label(
+                RichText::new("No layers on this page")
+                    .color(Color32::from_gray(135))
+                    .italics(),
+            );
+            return;
+        }
+
+        let mut drop_target = None;
+        for (root, element) in roots.iter().enumerate().rev() {
+            self.layer_tree_node(
+                ui,
+                root,
+                &[],
+                element,
+                0,
+                true,
+                false,
+                &mut drop_target,
+                None,
+            );
+        }
+        if ui.input(|input| input.pointer.any_released()) {
+            if let (Some(from), Some(to)) = (self.dragged_layer.take(), drop_target) {
+                self.move_layer(from, to);
+            } else {
+                self.dragged_layer = None;
+            }
+        }
+        self.layer_order_controls(ui);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn layer_tree_node(
+        &mut self,
+        ui: &mut egui::Ui,
+        root: usize,
+        path: &[usize],
+        element: &Element,
+        depth: usize,
+        ancestors_visible: bool,
+        ancestors_locked: bool,
+        drop_target: &mut Option<usize>,
+        label_override: Option<String>,
+    ) {
+        let has_children = match element {
+            Element::Group(group) => !group.children.is_empty(),
+            Element::Stack(stack) => !stack.children.is_empty(),
+            Element::Repeater(_) => true,
+            _ => false,
+        };
+        let expansion_id = ui.make_persistent_id(("layer-tree-expanded", root, path.to_vec()));
+        let mut expanded = ui
+            .data_mut(|data| data.get_temp::<bool>(expansion_id))
+            .unwrap_or(true);
+        let visible = element.is_visible();
+        let locked = element.is_locked();
+        let supports_layer_metadata = !matches!(element, Element::PageBreak);
+        let effective_visible = ancestors_visible && visible;
+        let effective_locked = ancestors_locked || locked;
+        let selected = self.is_layer_path_selected(root, path);
+        let label = label_override.unwrap_or_else(|| {
+            let index = path.last().copied().unwrap_or(root);
+            element_label(element, index)
+        });
+
+        let row = ui.horizontal(|ui| {
+            ui.add_space(depth as f32 * 11.0);
+            if has_children {
+                if ui
+                    .add_sized(
+                        [18.0, 22.0],
+                        egui::Button::new(if expanded { "▾" } else { "▸" }).frame(false),
+                    )
+                    .on_hover_text(if expanded { "Collapse" } else { "Expand" })
+                    .clicked()
+                {
+                    expanded = !expanded;
+                    ui.data_mut(|data| data.insert_temp(expansion_id, expanded));
+                }
+            } else {
+                ui.add_space(18.0);
+            }
+            let visibility = ui
+                .add_enabled(
+                    supports_layer_metadata,
+                    egui::Button::new(if visible { "VIS" } else { "HID" })
+                        .frame(false)
+                        .min_size(Vec2::new(27.0, 22.0)),
+                )
+                .on_hover_text(if visible {
+                    if supports_layer_metadata {
+                        "Hide this layer"
+                    } else {
+                        "Page breaks do not have visibility metadata"
+                    }
+                } else {
+                    "Show this layer"
+                });
+            let lock = ui
+                .add_enabled(
+                    supports_layer_metadata && !ancestors_locked,
+                    egui::Button::new(if locked { "LCK" } else { "—" })
+                        .frame(false)
+                        .min_size(Vec2::new(27.0, 22.0)),
+                )
+                .on_hover_text(if !supports_layer_metadata {
+                    "Page breaks do not have lock metadata"
+                } else if ancestors_locked {
+                    "Unlock the containing layer first"
+                } else if locked {
+                    "Unlock this layer"
+                } else {
+                    "Lock this layer"
+                });
+            let drag = if path.is_empty() {
+                ui.add(egui::Label::new("::").sense(if effective_locked {
+                    Sense::hover()
+                } else {
+                    Sense::drag()
+                }))
+                .on_hover_text(if effective_locked {
+                    "Unlock this layer to change paint order"
+                } else {
+                    "Drag to change top-level paint order"
+                })
+            } else {
+                ui.add(egui::Label::new("  "))
+            };
+            let text = RichText::new(label).color(if effective_visible {
+                Color32::from_gray(225)
+            } else {
+                Color32::from_gray(115)
+            });
+            let select = ui.selectable_label(selected, text);
+            (visibility, lock, drag, select)
+        });
+        let (visibility, lock, drag, select) = row.inner;
+        if visibility.clicked()
+            && let Some(target) = self.selected_nested_element_mut(root, path)
+        {
+            target.set_visible(!visible);
+            self.dirty = true;
+        }
+        if lock.clicked()
+            && let Some(target) = self.selected_nested_element_mut(root, path)
+        {
+            target.set_locked(!locked);
+            self.active_drag = None;
+            self.dirty = true;
+        }
+        if select.clicked() {
+            let additive = ui.input(|input| input.modifiers.shift);
+            self.select_layer_path(root, path, additive);
+        }
+        if path.is_empty() && drag.drag_started() {
+            self.dragged_layer = Some(root);
+        }
+        if path.is_empty() && self.dragged_layer.is_some() && row.response.hovered() {
+            *drop_target = Some(root);
+            ui.painter().rect_stroke(
+                row.response.rect.expand(2.0),
+                CornerRadius::same(2),
+                Stroke::new(1.0_f32, ORANGE),
+                StrokeKind::Outside,
+            );
+        }
+
+        if !expanded {
+            return;
+        }
+        let child_visible = ancestors_visible && visible;
+        let child_locked = ancestors_locked || locked;
+        match element {
+            Element::Group(group) => {
+                for (index, child) in group.children.iter().enumerate().rev() {
+                    let mut child_path = path.to_vec();
+                    child_path.push(index);
+                    self.layer_tree_node(
+                        ui,
+                        root,
+                        &child_path,
+                        child,
+                        depth + 1,
+                        child_visible,
+                        child_locked,
+                        drop_target,
+                        None,
+                    );
+                }
+            }
+            Element::Stack(stack) => {
+                for (index, child) in stack.children.iter().enumerate().rev() {
+                    let mut child_path = path.to_vec();
+                    child_path.push(index);
+                    self.layer_tree_node(
+                        ui,
+                        root,
+                        &child_path,
+                        child,
+                        depth + 1,
+                        child_visible,
+                        child_locked,
+                        drop_target,
+                        None,
+                    );
+                }
+            }
+            Element::Repeater(repeater) => {
+                let mut child_path = path.to_vec();
+                child_path.push(0);
+                self.layer_tree_node(
+                    ui,
+                    root,
+                    &child_path,
+                    &repeater.template,
+                    depth + 1,
+                    child_visible,
+                    child_locked,
+                    drop_target,
+                    Some(format!(
+                        "Item template · {}",
+                        element_label(&repeater.template, 0)
+                    )),
+                );
+            }
+            _ => {}
+        }
+    }
+
+    fn layer_order_controls(&mut self, ui: &mut egui::Ui) {
+        let (root, path, index, count, locked) = match self.selection.clone() {
+            Selection::Element(index) => {
+                let Some(element) = self.template.pages[self.current_page].elements.get(index)
+                else {
+                    return;
+                };
+                (
+                    index,
+                    Vec::new(),
+                    index,
+                    self.template.pages[self.current_page].elements.len(),
+                    element.is_locked(),
+                )
+            }
+            Selection::NestedElement { root, path } => {
+                let Some((&index, parent_path)) = path.split_last() else {
+                    return;
+                };
+                let Some(root_element) = self.template.pages[self.current_page].elements.get(root)
+                else {
+                    return;
+                };
+                let Some(parent) = element_at_path(root_element, parent_path) else {
+                    return;
+                };
+                let count = match parent {
+                    Element::Group(group) => group.children.len(),
+                    Element::Stack(stack) => stack.children.len(),
+                    Element::Repeater(_) => 1,
+                    _ => return,
+                };
+                let locked = self.nested_path_locked(root, &path);
+                (root, path, index, count, locked)
+            }
+            _ => return,
+        };
+        ui.add_space(6.0);
+        let mut movement = None;
+        ui.horizontal(|ui| {
+            if ui
+                .add_enabled(index > 0 && !locked, egui::Button::new("Back"))
+                .on_hover_text("Send behind every sibling layer")
+                .clicked()
+            {
+                movement = Some(LayerMove::Back);
+            }
+            if ui
+                .add_enabled(index > 0 && !locked, egui::Button::new("Lower"))
+                .on_hover_text("Move backward one sibling layer")
+                .clicked()
+            {
+                movement = Some(LayerMove::Backward);
+            }
+            if ui
+                .add_enabled(index + 1 < count && !locked, egui::Button::new("Raise"))
+                .on_hover_text("Move forward one sibling layer")
+                .clicked()
+            {
+                movement = Some(LayerMove::Forward);
+            }
+            if ui
+                .add_enabled(index + 1 < count && !locked, egui::Button::new("Front"))
+                .on_hover_text("Bring in front of every sibling layer")
+                .clicked()
+            {
+                movement = Some(LayerMove::Front);
+            }
+        });
+        ui.small(if path.is_empty() {
+            "Topmost page layer paints in front."
+        } else if count == 1 {
+            "This is the repeater's required item template."
+        } else {
+            "Topmost sibling paints in front."
+        });
+        if let Some(movement) = movement {
+            if path.is_empty() {
+                let selected = reorder_element(
+                    &mut self.template.pages[self.current_page].elements,
+                    index,
+                    movement,
+                );
+                self.selection = Selection::Element(selected);
+                self.dirty = true;
+            } else {
+                self.move_nested_layer(root, &path, movement);
+            }
+        }
+    }
+
+    fn nested_path_locked(&self, root: usize, path: &[usize]) -> bool {
+        self.nested_ancestors_locked(root, path)
+            || self
+                .selected_nested_element(root, path)
+                .is_none_or(Element::is_locked)
+    }
+
+    fn nested_ancestors_locked(&self, root: usize, path: &[usize]) -> bool {
+        let Some(root_element) = self.template.pages[self.current_page].elements.get(root) else {
+            return true;
+        };
+        if root_element.is_locked() {
+            return true;
+        }
+        (1..path.len()).any(|depth| {
+            element_at_path(root_element, &path[..depth]).is_none_or(Element::is_locked)
+        })
+    }
+
+    fn nested_has_sibling_collection(&self, root: usize, path: &[usize]) -> bool {
+        let Some((_, parent_path)) = path.split_last() else {
+            return false;
+        };
+        let Some(root_element) = self.template.pages[self.current_page].elements.get(root) else {
+            return false;
+        };
+        matches!(
+            element_at_path(root_element, parent_path),
+            Some(Element::Group(_) | Element::Stack(_))
+        )
+    }
+
     fn show_right_panel(&mut self, ctx: &egui::Context) {
         egui::SidePanel::right("studio-inspector")
             .default_width(300.0)
@@ -1661,6 +2098,9 @@ impl StudioApp {
                     Selection::Page => self.page_inspector(ui),
                     Selection::Field(index) => self.field_inspector(ui, index),
                     Selection::Element(index) => self.element_inspector(ui, index),
+                    Selection::NestedElement { root, path } => {
+                        self.nested_element_inspector(ui, root, &path)
+                    }
                     Selection::Elements { indices, .. } => {
                         self.multi_element_inspector(ui, &indices)
                     }
@@ -1931,7 +2371,11 @@ impl StudioApp {
             .unwrap_or_default();
         ui.heading(label);
         let element = &mut self.template.pages[self.current_page].elements[index];
-        let mut changed = layer_properties(ui, element);
+        let mut changed = if matches!(element, Element::PageBreak) {
+            false
+        } else {
+            layer_properties(ui, element)
+        };
         let locked = element.is_locked();
         if locked {
             ui.label(
@@ -1963,6 +2407,90 @@ impl StudioApp {
                 }
             });
         });
+    }
+
+    fn nested_element_inspector(&mut self, ui: &mut egui::Ui, root: usize, path: &[usize]) {
+        let Some(element) = self.selected_nested_element(root, path) else {
+            self.selection = Selection::Element(root);
+            return;
+        };
+        let label = element_label(element, path.last().copied().unwrap_or(0));
+        let ancestor_locked = self.nested_ancestors_locked(root, path);
+        let custom_fonts = self.template.fonts.to_vec();
+        let managed_assets = self
+            .project_root()
+            .and_then(|project_root| list_managed_assets(&project_root).ok())
+            .unwrap_or_default();
+        ui.heading(label);
+        ui.label(
+            RichText::new(format!(
+                "Nested layer · level {} · container layer {}",
+                path.len(),
+                root + 1
+            ))
+            .color(Color32::from_gray(155))
+            .small(),
+        );
+        ui.add_space(8.0);
+        if ancestor_locked {
+            ui.label(
+                RichText::new("Unlock the containing layer to edit this nested layer.")
+                    .color(Color32::from_gray(155))
+                    .small(),
+            );
+            ui.add_space(8.0);
+        }
+
+        let changed = ui
+            .add_enabled_ui(!ancestor_locked, |ui| {
+                let Some(element) = self.selected_nested_element_mut(root, path) else {
+                    return false;
+                };
+                if matches!(element, Element::PageBreak) {
+                    return element_properties(ui, element, &custom_fonts, &managed_assets);
+                }
+                let mut changed = layer_properties(ui, element);
+                let locked = element.is_locked();
+                if locked {
+                    ui.label(
+                        RichText::new("Unlock this layer to edit its content or geometry.")
+                            .color(Color32::from_gray(155))
+                            .small(),
+                    );
+                    ui.add_space(12.0);
+                }
+                changed |= ui
+                    .add_enabled_ui(!locked, |ui| {
+                        element_properties(ui, element, &custom_fonts, &managed_assets)
+                    })
+                    .inner;
+                changed
+            })
+            .inner;
+        self.dirty |= changed;
+
+        let effective_locked = self.nested_path_locked(root, path);
+        let structurally_editable = self.nested_has_sibling_collection(root, path);
+        ui.add_space(16.0);
+        ui.add_enabled_ui(!effective_locked && structurally_editable, |ui| {
+            ui.horizontal(|ui| {
+                if ui.button("Duplicate").clicked() {
+                    self.duplicate_selection();
+                }
+                if danger_button(ui, "Delete").clicked() {
+                    self.delete_selection();
+                }
+            });
+        });
+        if !structurally_editable {
+            ui.label(
+                RichText::new(
+                    "The repeater item template is required; edit or replace its children instead.",
+                )
+                .color(Color32::from_gray(145))
+                .small(),
+            );
+        }
     }
 
     fn show_canvas(&mut self, ctx: &egui::Context) {
@@ -5914,12 +6442,13 @@ mod tests {
     use super::{
         EditHistory, EditSnapshot, EditorGuide, ElementDragKind, ElementDragState, GuideAxis,
         PersistedState, PreviewErrorCopy, ScreenTransform, Selection, aligned_preview_text_origin,
-        alignment_targets, ensure_editable_page, first_template_variable,
-        guide_position_from_pointer, inverse_rotate_vector, normalize_percent_columns, parse_color,
-        preview_error_copy, preview_font_family, print_color, push_editor_guide,
-        remap_selection_after_layer_move, resolve_preview, rgb_hex, safe_stem, serialize_template,
+        alignment_targets, duplicate_nested_element, element_at_path, ensure_editable_page,
+        first_template_variable, guide_position_from_pointer, inverse_rotate_vector,
+        normalize_percent_columns, parse_color, preview_error_copy, preview_font_family,
+        print_color, push_editor_guide, remap_selection_after_layer_move, remove_nested_element,
+        reorder_nested_element, resolve_preview, rgb_hex, safe_stem, serialize_template,
     };
-    use crate::model::{ElementKind, new_element, starter_template};
+    use crate::model::{ElementKind, LayerMove, new_element, starter_template};
     use crate::system_fonts::SystemFontCatalog;
 
     #[test]
@@ -5955,6 +6484,49 @@ mod tests {
                 primary: 2,
             }
         );
+    }
+
+    #[test]
+    fn root_reordering_preserves_nested_selection_paths() {
+        let selection = Selection::NestedElement {
+            root: 0,
+            path: vec![0, 1],
+        };
+
+        assert_eq!(
+            remap_selection_after_layer_move(&selection, 0, 2),
+            Selection::NestedElement {
+                root: 2,
+                path: vec![0, 1],
+            }
+        );
+    }
+
+    #[test]
+    fn repeater_tree_paths_reach_and_edit_item_template_children() {
+        let mut repeater = new_element(ElementKind::Repeater, 0.0);
+        assert!(matches!(
+            element_at_path(&repeater, &[0]),
+            Some(Element::Group(_))
+        ));
+        assert!(matches!(
+            element_at_path(&repeater, &[0, 0]),
+            Some(Element::Text(_))
+        ));
+
+        assert!(duplicate_nested_element(&mut repeater, &[0, 0]));
+        let Some(Element::Group(group)) = element_at_path(&repeater, &[0]) else {
+            panic!("repeater template should remain a group");
+        };
+        assert_eq!(group.children.len(), 2);
+
+        assert!(reorder_nested_element(
+            &mut repeater,
+            &[0, 0],
+            LayerMove::Forward
+        ));
+        assert!(remove_nested_element(&mut repeater, &[0, 1]));
+        assert!(!remove_nested_element(&mut repeater, &[0]));
     }
 
     #[test]

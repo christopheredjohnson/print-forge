@@ -76,9 +76,11 @@ definitions, live semantic validation, raw JSON editing for direct schema access
 preview data, 100-step undo/redo history, and direct PDF rendering through the
 Print Forge layout and PDF crates. Elements can be rotated with the canvas
 handle, an exact inspector value, or the 90-degree shortcuts. The Layers panel
-can hide, lock, rename, drag, or move the selection backward, forward, fully
-behind, or fully in front. Hidden layers are omitted from both Studio previews
-and exported PDFs; locked layers remain selectable but resist editing commands.
+shows groups, flow stacks, and repeater item templates as collapsible trees.
+Top-level and nested layers can be selected, hidden, locked, renamed, or moved
+within their sibling paint order; top-level rows can also be reordered by drag.
+Hidden layers are omitted from both Studio previews and exported PDFs; locked
+layers remain selectable but resist editing commands.
 Non-printing rulers and page-specific guides support center lines, a quick 18pt
 margin set, exact point positions, and
 creation by dragging from the top or left ruler. Existing guides can be dragged
