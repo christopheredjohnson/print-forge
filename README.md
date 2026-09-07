@@ -72,7 +72,7 @@ The initial Studio supports native open/save dialogs, multipage projects,
 draggable, resizable, and rotatable page elements, named layers with persisted
 visibility and editing locks, drag-to-reorder paint order,
 document and element inspectors with inline color pickers, variable-field
-definitions, live semantic validation, raw JSON editing for advanced elements,
+definitions, live semantic validation, raw JSON editing for direct schema access,
 preview data, 100-step undo/redo history, and direct PDF rendering through the
 Print Forge layout and PDF crates. Elements can be rotated with the canvas
 handle, an exact inspector value, or the 90-degree shortcuts. The Layers panel
@@ -105,8 +105,10 @@ horizontal or vertical gaps, and performs bulk duplicate or delete operations.
 Dragging or using the arrow keys moves the selection together; Shift+Arrow
 nudges by 10pt, `Cmd/Ctrl+A` selects every layer, and Escape clears selection.
 
-Imported tables, groups, stacks, and repeaters remain editable through the JSON
-view while their dedicated visual inspectors are developed.
+Groups, flow stacks, tables, and repeaters are first-class palette elements with
+dedicated inspectors. Nested children and table columns can be added, reordered,
+and removed visually, while the JSON view remains available for direct schema
+access.
 
 ## CLI
 

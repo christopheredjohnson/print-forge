@@ -19,8 +19,9 @@ use print_forge_engine::{
 };
 use print_forge_pdf::{PdfRenderOptions, PdfRenderer};
 use print_forge_template::{
-    Color as PrintColor, DashStyle, Element, FieldType, FontFamily, FontStyle, ImageFit, Length,
-    QrErrorCorrection, Template, TextAlign, TextOverflow, Unit,
+    Color as PrintColor, DashStyle, Element, Field, FieldType, FlowOverflow, FontFamily, FontStyle,
+    ImageFit, Length, QrErrorCorrection, RepeatLayout, StackDirection, TableColumn,
+    TableColumnWidth, TableDateStyle, TableValueFormat, Template, TextAlign, TextOverflow, Unit,
 };
 use print_forge_validation::{ValidationReport, validate_template};
 use rfd::{FileDialog, MessageButtons, MessageDialog, MessageDialogResult, MessageLevel};
@@ -1352,32 +1353,10 @@ impl StudioApp {
 
                     ui.add_space(16.0);
                     section_label(ui, "ADD ELEMENT");
-                    egui::Grid::new("element-palette")
-                        .num_columns(2)
-                        .spacing([6.0, 6.0])
-                        .show(ui, |ui| {
-                            for (index, kind) in ElementKind::ALL.into_iter().enumerate() {
-                                if ui
-                                    .add_sized([101.0, 30.0], egui::Button::new(kind.label()))
-                                    .clicked()
-                                {
-                                    let offset =
-                                        (self.template.pages[self.current_page].elements.len() % 8)
-                                            as f32
-                                            * 9.0;
-                                    self.template.pages[self.current_page]
-                                        .elements
-                                        .push(new_element(kind, offset));
-                                    let element_index =
-                                        self.template.pages[self.current_page].elements.len() - 1;
-                                    self.selection = Selection::Element(element_index);
-                                    self.dirty = true;
-                                }
-                                if index % 2 == 1 {
-                                    ui.end_row();
-                                }
-                            }
-                        });
+                    self.element_palette(ui, "basic-element-palette", &ElementKind::BASIC);
+                    ui.add_space(10.0);
+                    section_label(ui, "ADVANCED LAYOUT");
+                    self.element_palette(ui, "advanced-element-palette", &ElementKind::ADVANCED);
 
                     ui.add_space(16.0);
                     self.asset_panel(ui);
@@ -1591,6 +1570,78 @@ impl StudioApp {
                     }
                 });
             });
+    }
+
+    fn element_palette(&mut self, ui: &mut egui::Ui, id: &str, kinds: &[ElementKind]) {
+        egui::Grid::new(id)
+            .num_columns(2)
+            .spacing([6.0, 6.0])
+            .show(ui, |ui| {
+                for (index, kind) in kinds.iter().copied().enumerate() {
+                    if ui
+                        .add_sized([101.0, 30.0], egui::Button::new(kind.label()))
+                        .clicked()
+                    {
+                        self.add_palette_element(kind);
+                    }
+                    if index % 2 == 1 {
+                        ui.end_row();
+                    }
+                }
+            });
+    }
+
+    fn add_palette_element(&mut self, kind: ElementKind) {
+        let offset = (self.template.pages[self.current_page].elements.len() % 8) as f32 * 9.0;
+        let mut element = new_element(kind, offset);
+        if matches!(element, Element::Table(_) | Element::Repeater(_)) {
+            let source = self.collection_source_for_new_element();
+            match &mut element {
+                Element::Table(table) => table.source = source,
+                Element::Repeater(repeater) => repeater.source = source,
+                _ => {}
+            }
+        }
+        self.template.pages[self.current_page]
+            .elements
+            .push(element);
+        let element_index = self.template.pages[self.current_page].elements.len() - 1;
+        self.selection = Selection::Element(element_index);
+        self.dirty = true;
+    }
+
+    fn collection_source_for_new_element(&mut self) -> String {
+        if let Some(field) = self
+            .template
+            .fields
+            .iter()
+            .find(|field| field.field_type == FieldType::Collection)
+        {
+            return field.name.clone();
+        }
+        let mut suffix = 1;
+        let name = loop {
+            let candidate = if suffix == 1 {
+                "items".to_owned()
+            } else {
+                format!("items_{suffix}")
+            };
+            if self
+                .template
+                .fields
+                .iter()
+                .all(|field| field.name != candidate)
+            {
+                break candidate;
+            }
+            suffix += 1;
+        };
+        self.template.fields.push(Field {
+            name: name.clone(),
+            field_type: FieldType::Collection,
+            required: false,
+        });
+        name
     }
 
     fn show_right_panel(&mut self, ctx: &egui::Context) {
@@ -1818,7 +1869,7 @@ impl StudioApp {
         );
         ui.add_space(16.0);
         ui.label(
-            RichText::new("Headers, footers, flow regions, tables, groups, and repeaters can be imported and inspected on the canvas. Dedicated visual controls are planned as Studio grows.")
+            RichText::new("Groups, flow stacks, tables, and repeaters can be added from the palette and edited in the inspector. Nested children and table columns can be reordered without editing raw JSON.")
                 .color(Color32::from_gray(155))
                 .small(),
         );
@@ -3923,12 +3974,32 @@ fn paint_element_content(
         Element::Barcode(barcode) => {
             paint_barcode_placeholder(painter, rect, &barcode.value, transform);
         }
-        Element::Group(_) => paint_placeholder(painter, rect, "GROUP", "composed elements", None),
-        Element::Stack(_) => {
-            paint_placeholder(painter, rect, "FLOW STACK", "paginating region", None)
+        Element::Group(group) => {
+            let detail = format!("{} nested layer(s)", group.children.len());
+            paint_placeholder(painter, rect, "GROUP", &detail, None);
         }
-        Element::Table(table) => paint_placeholder(painter, rect, "TABLE", &table.source, None),
-        Element::Line(_) | Element::Repeater(_) | Element::PageBreak => {}
+        Element::Stack(stack) => {
+            let direction = match stack.direction {
+                StackDirection::Vertical => "vertical",
+                StackDirection::Horizontal => "horizontal",
+            };
+            let detail = format!("{direction} • {} flow item(s)", stack.children.len());
+            paint_placeholder(painter, rect, "FLOW STACK", &detail, None);
+        }
+        Element::Table(table) => {
+            let detail = format!("{} • {} column(s)", table.source, table.columns.len());
+            paint_placeholder(painter, rect, "TABLE", &detail, None);
+        }
+        Element::Repeater(repeater) => {
+            let layout = match repeater.layout {
+                RepeatLayout::Vertical => "vertical",
+                RepeatLayout::Horizontal => "horizontal",
+                RepeatLayout::Grid => "grid",
+            };
+            let detail = format!("{} • {layout}", repeater.source);
+            paint_placeholder(painter, rect, "REPEATER", &detail, None);
+        }
+        Element::Line(_) | Element::PageBreak => {}
     }
 }
 
@@ -4681,18 +4752,621 @@ fn element_properties(
             changed |= length_editor(ui, "Width", &mut line.width, "line-width");
             changed |= color_editor(ui, "Color", &mut line.color);
         }
-        Element::Group(_)
-        | Element::Stack(_)
-        | Element::Table(_)
-        | Element::Repeater(_)
-        | Element::PageBreak => {
+        Element::Group(group) => {
+            section_label(ui, "GROUP CONTENT");
             ui.label(
-                RichText::new("This advanced element is preserved and previewed. Edit its complete structure in the JSON source view for now.")
+                RichText::new("Child positions are relative to the group bounds.")
+                    .color(Color32::from_gray(155))
+                    .small(),
+            );
+            changed |= child_elements_editor(
+                ui,
+                &mut group.children,
+                ChildContext::Absolute,
+                custom_fonts,
+                managed_assets,
+            );
+        }
+        Element::Stack(stack) => {
+            section_label(ui, "FLOW LAYOUT");
+            changed |= enum_combo(
+                ui,
+                "Direction",
+                &mut stack.direction,
+                &[
+                    (StackDirection::Vertical, "Vertical"),
+                    (StackDirection::Horizontal, "Horizontal"),
+                ],
+            );
+            changed |= length_editor(ui, "Gap", &mut stack.gap, "stack-gap");
+            changed |= length_editor(ui, "Padding", &mut stack.padding, "stack-padding");
+            changed |= enum_combo(
+                ui,
+                "Overflow",
+                &mut stack.overflow,
+                &[
+                    (FlowOverflow::Paginate, "Paginate"),
+                    (FlowOverflow::Error, "Error"),
+                ],
+            );
+            changed |= ui
+                .checkbox(&mut stack.keep_together, "Keep children together")
+                .changed();
+            ui.label("Minimum items before automatic break");
+            changed |= ui
+                .add(egui::DragValue::new(&mut stack.orphans).range(1..=128))
+                .changed();
+            ui.add_space(10.0);
+            section_label(ui, "FLOW CHILDREN");
+            changed |= child_elements_editor(
+                ui,
+                &mut stack.children,
+                ChildContext::Flow(stack.direction),
+                custom_fonts,
+                managed_assets,
+            );
+        }
+        Element::Table(table) => {
+            section_label(ui, "TABLE DATA");
+            changed |= string_editor(ui, "Collection source", &mut table.source);
+            changed |= ui
+                .checkbox(&mut table.header, "Repeat header row")
+                .changed();
+            ui.add_space(10.0);
+            section_label(ui, "TABLE TYPE");
+            changed |= font_family_editor(ui, &mut table.font, custom_fonts);
+            changed |= length_editor(ui, "Font size", &mut table.font_size, "table-font-size");
+            changed |= optional_length_editor(
+                ui,
+                "Custom line height",
+                &mut table.line_height,
+                Length::points(11.0),
+                "table-line-height",
+            );
+            changed |= enum_combo(
+                ui,
+                "Header style",
+                &mut table.header_font_style,
+                &[
+                    (FontStyle::Regular, "Regular"),
+                    (FontStyle::Bold, "Bold"),
+                    (FontStyle::Italic, "Italic"),
+                    (FontStyle::BoldItalic, "Bold italic"),
+                ],
+            );
+            changed |= length_editor(
+                ui,
+                "Cell padding",
+                &mut table.cell_padding,
+                "table-cell-padding",
+            );
+            changed |= color_editor(ui, "Text color", &mut table.color);
+            ui.add_space(10.0);
+            section_label(ui, "TABLE APPEARANCE");
+            changed |= optional_color_editor(ui, "Header background", &mut table.header_background);
+            changed |= optional_color_editor(ui, "Row background", &mut table.row_background);
+            changed |= optional_color_editor(
+                ui,
+                "Alternating row background",
+                &mut table.alternate_row_background,
+            );
+            changed |= optional_stroke_editor(ui, "Border", &mut table.border, "table-border");
+            ui.add_space(10.0);
+            section_label(ui, "COLUMNS");
+            changed |= table_columns_editor(ui, &mut table.columns);
+        }
+        Element::Repeater(repeater) => {
+            section_label(ui, "REPEATER");
+            changed |= string_editor(ui, "Collection source", &mut repeater.source);
+            changed |= enum_combo(
+                ui,
+                "Layout",
+                &mut repeater.layout,
+                &[
+                    (RepeatLayout::Vertical, "Vertical"),
+                    (RepeatLayout::Horizontal, "Horizontal"),
+                    (RepeatLayout::Grid, "Grid"),
+                ],
+            );
+            ui.label(
+                RichText::new(
+                    "The template bounds define the first slot and the spacing between repeated items.",
+                )
+                .color(Color32::from_gray(155))
+                .small(),
+            );
+            ui.add_space(10.0);
+            section_label(ui, "ITEM TEMPLATE");
+            ui.push_id("repeater-item-template", |ui| {
+                changed |=
+                    nested_element_editor(ui, &mut repeater.template, custom_fonts, managed_assets);
+            });
+        }
+        Element::PageBreak => {
+            ui.label(
+                RichText::new(
+                    "This forces the following child onto a new page. Page breaks are valid only in vertical flow stacks.",
+                )
                     .color(Color32::from_gray(155)),
             );
         }
     }
     changed
+}
+
+#[derive(Clone, Copy)]
+enum ChildContext {
+    Absolute,
+    Flow(StackDirection),
+}
+
+fn child_elements_editor(
+    ui: &mut egui::Ui,
+    children: &mut Vec<Element>,
+    context: ChildContext,
+    custom_fonts: &[FontFamily],
+    managed_assets: &[ManagedAsset],
+) -> bool {
+    let mut changed = false;
+    ui.horizontal_wrapped(|ui| {
+        let kinds: &[ElementKind] = match context {
+            ChildContext::Absolute => &[
+                ElementKind::Text,
+                ElementKind::Rectangle,
+                ElementKind::Image,
+                ElementKind::Line,
+                ElementKind::Svg,
+                ElementKind::QrCode,
+                ElementKind::Barcode,
+                ElementKind::Group,
+                ElementKind::Stack,
+            ],
+            ChildContext::Flow(_) => &[
+                ElementKind::Text,
+                ElementKind::Rectangle,
+                ElementKind::Group,
+                ElementKind::Stack,
+            ],
+        };
+        for kind in kinds {
+            if ui.small_button(format!("+ {}", kind.label())).clicked() {
+                children.push(new_nested_element(*kind, children.len(), context));
+                changed = true;
+            }
+        }
+        if matches!(context, ChildContext::Flow(StackDirection::Vertical))
+            && ui.small_button("+ Page break").clicked()
+        {
+            children.push(Element::PageBreak);
+            changed = true;
+        }
+    });
+    if children.is_empty() {
+        ui.label(
+            RichText::new("No children yet")
+                .color(Color32::from_gray(145))
+                .italics(),
+        );
+        return changed;
+    }
+
+    let child_count = children.len();
+    let mut action = None;
+    for (index, child) in children.iter_mut().enumerate() {
+        let label = element_label(child, index);
+        ui.push_id(("advanced-child", index), |ui| {
+            egui::CollapsingHeader::new(label)
+                .default_open(index == child_count - 1 && changed)
+                .show(ui, |ui| {
+                    changed |= nested_element_editor(ui, child, custom_fonts, managed_assets);
+                    ui.horizontal(|ui| {
+                        if ui.add_enabled(index > 0, egui::Button::new("Up")).clicked() {
+                            action = Some(ChildAction::MoveUp(index));
+                        }
+                        if ui
+                            .add_enabled(index + 1 < child_count, egui::Button::new("Down"))
+                            .clicked()
+                        {
+                            action = Some(ChildAction::MoveDown(index));
+                        }
+                        if danger_button(ui, "Remove").clicked() {
+                            action = Some(ChildAction::Remove(index));
+                        }
+                    });
+                });
+        });
+    }
+    match action {
+        Some(ChildAction::MoveUp(index)) => {
+            children.swap(index, index - 1);
+            changed = true;
+        }
+        Some(ChildAction::MoveDown(index)) => {
+            children.swap(index, index + 1);
+            changed = true;
+        }
+        Some(ChildAction::Remove(index)) => {
+            children.remove(index);
+            changed = true;
+        }
+        None => {}
+    }
+    changed
+}
+
+enum ChildAction {
+    MoveUp(usize),
+    MoveDown(usize),
+    Remove(usize),
+}
+
+fn nested_element_editor(
+    ui: &mut egui::Ui,
+    element: &mut Element,
+    custom_fonts: &[FontFamily],
+    managed_assets: &[ManagedAsset],
+) -> bool {
+    if matches!(element, Element::PageBreak) {
+        ui.label(
+            RichText::new("Explicit page break")
+                .color(Color32::from_gray(155))
+                .italics(),
+        );
+        return false;
+    }
+    let mut changed = layer_properties(ui, element);
+    let locked = element.is_locked();
+    changed |= ui
+        .add_enabled_ui(!locked, |ui| {
+            element_properties(ui, element, custom_fonts, managed_assets)
+        })
+        .inner;
+    changed
+}
+
+fn new_nested_element(kind: ElementKind, index: usize, context: ChildContext) -> Element {
+    let mut element = new_element(kind, 0.0);
+    if let Some(bounds) = element_bounds_mut(&mut element) {
+        match context {
+            ChildContext::Absolute => {
+                let offset = index as f32 * 8.0;
+                bounds.x = Length::points(12.0 + offset);
+                bounds.y = Length::points(12.0 + offset);
+            }
+            ChildContext::Flow(_) => {
+                bounds.x = Length::points(0.0);
+                bounds.y = Length::points(0.0);
+                bounds.width = Length::points(bounds.width.to_points().min(276.0));
+            }
+        }
+    }
+    if matches!(context, ChildContext::Flow(_))
+        && let Element::Stack(stack) = &mut element
+    {
+        let content_width = stack
+            .position
+            .as_ref()
+            .map(|bounds| bounds.width.to_points() - stack.padding.to_points() * 2.0)
+            .unwrap_or(0.0)
+            .max(1.0);
+        for child in &mut stack.children {
+            if let Some(bounds) = element_bounds_mut(child) {
+                bounds.width = Length::points(bounds.width.to_points().min(content_width));
+            }
+        }
+    }
+    element
+}
+
+fn optional_length_editor(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: &mut Option<Length>,
+    default: Length,
+    id: &str,
+) -> bool {
+    let mut enabled = value.is_some();
+    let mut changed = ui.checkbox(&mut enabled, label).changed();
+    if enabled && value.is_none() {
+        *value = Some(default);
+        changed = true;
+    } else if !enabled && value.is_some() {
+        *value = None;
+        changed = true;
+    }
+    if let Some(value) = value {
+        changed |= length_editor(ui, label, value, id);
+    }
+    changed
+}
+
+fn optional_stroke_editor(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: &mut Option<print_forge_template::Stroke>,
+    id: &str,
+) -> bool {
+    let mut enabled = value.is_some();
+    let mut changed = ui.checkbox(&mut enabled, label).changed();
+    if enabled && value.is_none() {
+        *value = Some(print_forge_template::Stroke {
+            width: Length::points(0.5),
+            color: "#9FB7C9".to_owned(),
+            dash: DashStyle::Solid,
+        });
+        changed = true;
+    } else if !enabled && value.is_some() {
+        *value = None;
+        changed = true;
+    }
+    if let Some(stroke) = value {
+        changed |= length_editor(ui, "Width", &mut stroke.width, id);
+        changed |= color_editor(ui, "Color", &mut stroke.color);
+        changed |= enum_combo(
+            ui,
+            "Dash",
+            &mut stroke.dash,
+            &[
+                (DashStyle::Solid, "Solid"),
+                (DashStyle::Dashed, "Dashed"),
+                (DashStyle::Dotted, "Dotted"),
+            ],
+        );
+    }
+    changed
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum ColumnWidthKind {
+    Percent,
+    Fixed,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum ColumnFormatKind {
+    None,
+    Number,
+    Currency,
+    Date,
+}
+
+fn table_columns_editor(ui: &mut egui::Ui, columns: &mut Vec<TableColumn>) -> bool {
+    let mut changed = false;
+    if ui.button("+ Add column").clicked() {
+        let number = columns.len() + 1;
+        columns.push(TableColumn {
+            field: format!("field_{number}"),
+            header: format!("Column {number}"),
+            width: TableColumnWidth::Percent { value: 25.0 },
+            align: TextAlign::Left,
+            format: None,
+        });
+        normalize_percent_columns(columns);
+        changed = true;
+    }
+    ui.label(
+        RichText::new("Column widths must resolve to the table width.")
+            .color(Color32::from_gray(145))
+            .small(),
+    );
+    let column_count = columns.len();
+    let mut action = None;
+    for (index, column) in columns.iter_mut().enumerate() {
+        let title = if column.header.trim().is_empty() {
+            format!("Column {}", index + 1)
+        } else {
+            format!("{}. {}", index + 1, column.header)
+        };
+        ui.push_id(("table-column", index), |ui| {
+            egui::CollapsingHeader::new(title)
+                .default_open(column_count == 1)
+                .show(ui, |ui| {
+                    changed |= string_editor(ui, "Field", &mut column.field);
+                    changed |= string_editor(ui, "Header", &mut column.header);
+                    changed |= enum_combo(
+                        ui,
+                        "Alignment",
+                        &mut column.align,
+                        &[
+                            (TextAlign::Left, "Left"),
+                            (TextAlign::Center, "Center"),
+                            (TextAlign::Right, "Right"),
+                            (TextAlign::Justify, "Justify"),
+                        ],
+                    );
+                    let mut width_kind = match column.width {
+                        TableColumnWidth::Percent { .. } => ColumnWidthKind::Percent,
+                        TableColumnWidth::Fixed { .. } => ColumnWidthKind::Fixed,
+                    };
+                    if enum_combo(
+                        ui,
+                        "Width type",
+                        &mut width_kind,
+                        &[
+                            (ColumnWidthKind::Percent, "Percent"),
+                            (ColumnWidthKind::Fixed, "Fixed"),
+                        ],
+                    ) {
+                        column.width = match width_kind {
+                            ColumnWidthKind::Percent => TableColumnWidth::Percent { value: 25.0 },
+                            ColumnWidthKind::Fixed => TableColumnWidth::Fixed {
+                                value: Length::points(72.0),
+                            },
+                        };
+                        changed = true;
+                    }
+                    match &mut column.width {
+                        TableColumnWidth::Percent { value } => {
+                            ui.label("Width");
+                            changed |= ui
+                                .add(egui::DragValue::new(value).range(0.1..=100.0).suffix("%"))
+                                .changed();
+                        }
+                        TableColumnWidth::Fixed { value } => {
+                            changed |= length_editor(ui, "Width", value, "column-width");
+                        }
+                    }
+                    let mut format_kind = match &column.format {
+                        None => ColumnFormatKind::None,
+                        Some(TableValueFormat::Number { .. }) => ColumnFormatKind::Number,
+                        Some(TableValueFormat::Currency { .. }) => ColumnFormatKind::Currency,
+                        Some(TableValueFormat::Date { .. }) => ColumnFormatKind::Date,
+                    };
+                    if enum_combo(
+                        ui,
+                        "Value format",
+                        &mut format_kind,
+                        &[
+                            (ColumnFormatKind::None, "None"),
+                            (ColumnFormatKind::Number, "Number"),
+                            (ColumnFormatKind::Currency, "Currency"),
+                            (ColumnFormatKind::Date, "Date"),
+                        ],
+                    ) {
+                        column.format = match format_kind {
+                            ColumnFormatKind::None => None,
+                            ColumnFormatKind::Number => {
+                                Some(TableValueFormat::Number { decimals: 2 })
+                            }
+                            ColumnFormatKind::Currency => Some(TableValueFormat::Currency {
+                                symbol: "$".to_owned(),
+                                decimals: 2,
+                            }),
+                            ColumnFormatKind::Date => Some(TableValueFormat::Date {
+                                style: TableDateStyle::Iso,
+                            }),
+                        };
+                        changed = true;
+                    }
+                    match &mut column.format {
+                        Some(TableValueFormat::Number { decimals }) => {
+                            ui.label("Decimal places");
+                            changed |= ui
+                                .add(egui::DragValue::new(decimals).range(0..=12))
+                                .changed();
+                        }
+                        Some(TableValueFormat::Currency { symbol, decimals }) => {
+                            changed |= string_editor(ui, "Currency symbol", symbol);
+                            ui.label("Decimal places");
+                            changed |= ui
+                                .add(egui::DragValue::new(decimals).range(0..=12))
+                                .changed();
+                        }
+                        Some(TableValueFormat::Date { style }) => {
+                            changed |= enum_combo(
+                                ui,
+                                "Date style",
+                                style,
+                                &[
+                                    (TableDateStyle::Iso, "ISO"),
+                                    (TableDateStyle::Us, "US"),
+                                    (TableDateStyle::European, "European"),
+                                    (TableDateStyle::Long, "Long"),
+                                ],
+                            );
+                        }
+                        None => {}
+                    }
+                    ui.horizontal(|ui| {
+                        if ui.add_enabled(index > 0, egui::Button::new("Up")).clicked() {
+                            action = Some(ChildAction::MoveUp(index));
+                        }
+                        if ui
+                            .add_enabled(index + 1 < column_count, egui::Button::new("Down"))
+                            .clicked()
+                        {
+                            action = Some(ChildAction::MoveDown(index));
+                        }
+                        if ui
+                            .add_enabled(column_count > 1, egui::Button::new("Remove"))
+                            .clicked()
+                        {
+                            action = Some(ChildAction::Remove(index));
+                        }
+                    });
+                });
+        });
+    }
+    match action {
+        Some(ChildAction::MoveUp(index)) => {
+            columns.swap(index, index - 1);
+            changed = true;
+        }
+        Some(ChildAction::MoveDown(index)) => {
+            columns.swap(index, index + 1);
+            changed = true;
+        }
+        Some(ChildAction::Remove(index)) => {
+            columns.remove(index);
+            normalize_percent_columns(columns);
+            changed = true;
+        }
+        None => {}
+    }
+    if columns
+        .iter()
+        .all(|column| matches!(column.width, TableColumnWidth::Percent { .. }))
+    {
+        let total = columns
+            .iter()
+            .map(|column| match column.width {
+                TableColumnWidth::Percent { value } => value,
+                TableColumnWidth::Fixed { .. } => 0.0,
+            })
+            .sum::<f32>();
+        ui.horizontal(|ui| {
+            let color = if (total - 100.0).abs() <= 0.01 {
+                Color32::from_gray(145)
+            } else {
+                Color32::from_rgb(235, 164, 70)
+            };
+            ui.label(
+                RichText::new(format!("Percent total: {total:.1}%"))
+                    .color(color)
+                    .small(),
+            );
+            if ui
+                .add_enabled(
+                    !columns.is_empty() && (total - 100.0).abs() > 0.01,
+                    egui::Button::new("Normalize"),
+                )
+                .clicked()
+            {
+                normalize_percent_columns(columns);
+                changed = true;
+            }
+        });
+    }
+    changed
+}
+
+fn normalize_percent_columns(columns: &mut [TableColumn]) {
+    if !columns.is_empty()
+        && columns
+            .iter()
+            .all(|column| matches!(column.width, TableColumnWidth::Percent { .. }))
+    {
+        let total = columns
+            .iter()
+            .map(|column| match column.width {
+                TableColumnWidth::Percent { value } => value.max(0.0),
+                TableColumnWidth::Fixed { .. } => 0.0,
+            })
+            .sum::<f32>();
+        let equal_width = 100.0 / columns.len() as f32;
+        for column in columns {
+            let TableColumnWidth::Percent { value } = column.width else {
+                unreachable!("all columns were checked as percentages");
+            };
+            column.width = TableColumnWidth::Percent {
+                value: if total > f32::EPSILON {
+                    value.max(0.0) / total * 100.0
+                } else {
+                    equal_width
+                },
+            };
+        }
+    }
 }
 
 fn layer_properties(ui: &mut egui::Ui, element: &mut Element) -> bool {
@@ -5232,15 +5906,18 @@ mod tests {
 
     use eframe::egui::{Color32, FontFamily as EguiFontFamily, Pos2, Vec2};
     use print_forge_engine::{DrawCommand, ResolvedFont};
-    use print_forge_template::{Color as PrintColor, Element, TextAlign};
+    use print_forge_template::{
+        Color as PrintColor, Element, Field, FieldType, TableColumn, TableColumnWidth, TextAlign,
+    };
+    use print_forge_validation::validate_template;
 
     use super::{
         EditHistory, EditSnapshot, EditorGuide, ElementDragKind, ElementDragState, GuideAxis,
         PersistedState, PreviewErrorCopy, ScreenTransform, Selection, aligned_preview_text_origin,
         alignment_targets, ensure_editable_page, first_template_variable,
-        guide_position_from_pointer, inverse_rotate_vector, parse_color, preview_error_copy,
-        preview_font_family, print_color, push_editor_guide, remap_selection_after_layer_move,
-        resolve_preview, rgb_hex, safe_stem, serialize_template,
+        guide_position_from_pointer, inverse_rotate_vector, normalize_percent_columns, parse_color,
+        preview_error_copy, preview_font_family, print_color, push_editor_guide,
+        remap_selection_after_layer_move, resolve_preview, rgb_hex, safe_stem, serialize_template,
     };
     use crate::model::{ElementKind, new_element, starter_template};
     use crate::system_fonts::SystemFontCatalog;
@@ -5495,6 +6172,68 @@ mod tests {
 
         assert_eq!(text.lines[0].value, "Hello Ada");
         assert!(preview.placeholder_variables.is_empty());
+    }
+
+    #[test]
+    fn advanced_palette_elements_are_valid_and_render_through_the_engine() {
+        let mut template = starter_template();
+        template.fields.push(Field {
+            name: "items".to_owned(),
+            field_type: FieldType::Collection,
+            required: false,
+        });
+        template.pages[0].elements = ElementKind::ADVANCED
+            .into_iter()
+            .map(|kind| new_element(kind, 0.0))
+            .collect();
+
+        let validation = validate_template(&template);
+        assert!(validation.is_valid(), "{:#?}", validation.diagnostics());
+        assert!(
+            validation
+                .diagnostics()
+                .iter()
+                .all(|diagnostic| diagnostic.code != "element.outside_bleed"),
+            "{:#?}",
+            validation.diagnostics()
+        );
+
+        let preview = resolve_preview(
+            &template,
+            r#"{"items":[{"name":"Ada","description":"Passenger","value":"1"}]}"#,
+            PathBuf::from("."),
+        )
+        .unwrap();
+
+        assert!(!preview.pages.is_empty());
+        assert!(preview.pages.iter().any(|page| !page.commands.is_empty()));
+    }
+
+    #[test]
+    fn table_percent_widths_normalize_without_losing_their_proportions() {
+        let mut columns = [70.0, 30.0, 25.0]
+            .into_iter()
+            .enumerate()
+            .map(|(index, value)| TableColumn {
+                field: format!("field_{index}"),
+                header: String::new(),
+                width: TableColumnWidth::Percent { value },
+                align: TextAlign::Left,
+                format: None,
+            })
+            .collect::<Vec<_>>();
+
+        normalize_percent_columns(&mut columns);
+
+        let widths = columns
+            .iter()
+            .map(|column| match column.width {
+                TableColumnWidth::Percent { value } => value,
+                TableColumnWidth::Fixed { .. } => unreachable!(),
+            })
+            .collect::<Vec<_>>();
+        assert!((widths.iter().sum::<f32>() - 100.0).abs() < 0.001);
+        assert!((widths[0] / widths[1] - 70.0 / 30.0).abs() < 0.001);
     }
 
     #[test]

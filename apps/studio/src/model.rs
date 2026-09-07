@@ -1,7 +1,9 @@
 use print_forge_template::{
     BarcodeElement, BarcodeFormat, Bounds, DashStyle, Document, DocumentMetadata, Element, Field,
-    FieldType, ImageElement, ImageFit, Length, LineElement, Page, QrCodeElement, QrErrorCorrection,
-    RectangleElement, SvgElement, Template, TextAlign, TextElement, TextOverflow, Unit,
+    FieldType, FlowOverflow, FontStyle, GroupElement, ImageElement, ImageFit, Length, LineElement,
+    Page, QrCodeElement, QrErrorCorrection, RectangleElement, RepeatLayout, RepeaterElement,
+    StackDirection, StackElement, Stroke, SvgElement, TableColumn, TableColumnWidth, TableElement,
+    Template, TextAlign, TextElement, TextOverflow, Unit,
 };
 use serde::{Deserialize, Serialize};
 
@@ -14,6 +16,10 @@ pub enum ElementKind {
     Svg,
     QrCode,
     Barcode,
+    Group,
+    Stack,
+    Table,
+    Repeater,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -54,7 +60,7 @@ pub struct SnapResult {
 }
 
 impl ElementKind {
-    pub const ALL: [Self; 7] = [
+    pub const BASIC: [Self; 7] = [
         Self::Text,
         Self::Rectangle,
         Self::Image,
@@ -63,6 +69,8 @@ impl ElementKind {
         Self::QrCode,
         Self::Barcode,
     ];
+
+    pub const ADVANCED: [Self; 4] = [Self::Group, Self::Stack, Self::Table, Self::Repeater];
 
     pub const fn label(self) -> &'static str {
         match self {
@@ -73,6 +81,10 @@ impl ElementKind {
             Self::Svg => "SVG",
             Self::QrCode => "QR code",
             Self::Barcode => "Barcode",
+            Self::Group => "Group",
+            Self::Stack => "Flow stack",
+            Self::Table => "Table",
+            Self::Repeater => "Repeater",
         }
     }
 }
@@ -195,7 +207,146 @@ pub fn new_element(kind: ElementKind, offset: f32) -> Element {
             background: "#FFFFFF".to_owned(),
             rotation: 0.0,
         }),
+        ElementKind::Group => Element::Group(GroupElement {
+            name: None,
+            visible: true,
+            locked: false,
+            position: Some(bounds(x, y, 252.0, 108.0)),
+            children: vec![
+                Element::Rectangle(RectangleElement {
+                    name: Some("Group background".to_owned()),
+                    visible: true,
+                    locked: false,
+                    position: Some(bounds(0.0, 0.0, 252.0, 108.0)),
+                    fill: Some("#FFF2EB".to_owned()),
+                    stroke: Some(Stroke {
+                        width: Length::points(1.0),
+                        color: "#F45B20".to_owned(),
+                        dash: DashStyle::Solid,
+                    }),
+                    rotation: 0.0,
+                }),
+                Element::Text(TextElement {
+                    name: Some("Group text".to_owned()),
+                    visible: true,
+                    locked: false,
+                    position: Some(bounds(16.0, 42.0, 220.0, 24.0)),
+                    value: "Reusable group".to_owned(),
+                    font_size: Length::points(16.0),
+                    font: None,
+                    font_style: FontStyle::Bold,
+                    line_height: None,
+                    align: TextAlign::Center,
+                    overflow: TextOverflow::Shrink,
+                    min_font_size: Some(Length::points(9.0)),
+                    color: "#20252A".to_owned(),
+                    rotation: 0.0,
+                }),
+            ],
+        }),
+        ElementKind::Stack => Element::Stack(StackElement {
+            name: None,
+            visible: true,
+            locked: false,
+            position: Some(bounds(x, y - 108.0, 300.0, 216.0)),
+            direction: StackDirection::Vertical,
+            gap: Length::points(8.0),
+            padding: Length::points(12.0),
+            overflow: FlowOverflow::Paginate,
+            keep_together: false,
+            orphans: 1,
+            children: vec![
+                flow_text("First flow item", 276.0),
+                flow_text("Second flow item", 276.0),
+            ],
+        }),
+        ElementKind::Table => Element::Table(TableElement {
+            name: None,
+            visible: true,
+            locked: false,
+            position: Some(bounds(x, y - 108.0, 360.0, 216.0)),
+            source: "items".to_owned(),
+            header: true,
+            font: None,
+            font_size: Length::points(9.0),
+            line_height: Some(Length::points(11.0)),
+            color: "#20252A".to_owned(),
+            header_font_style: FontStyle::Bold,
+            cell_padding: Length::points(4.0),
+            border: Some(Stroke {
+                width: Length::points(0.5),
+                color: "#9FB7C9".to_owned(),
+                dash: DashStyle::Solid,
+            }),
+            header_background: Some("#E8EEF2".to_owned()),
+            row_background: Some("#FFFFFF".to_owned()),
+            alternate_row_background: Some("#F5F7F9".to_owned()),
+            columns: vec![
+                TableColumn {
+                    field: "description".to_owned(),
+                    header: "Description".to_owned(),
+                    width: TableColumnWidth::Percent { value: 70.0 },
+                    align: TextAlign::Left,
+                    format: None,
+                },
+                TableColumn {
+                    field: "value".to_owned(),
+                    header: "Value".to_owned(),
+                    width: TableColumnWidth::Percent { value: 30.0 },
+                    align: TextAlign::Right,
+                    format: None,
+                },
+            ],
+        }),
+        ElementKind::Repeater => Element::Repeater(RepeaterElement {
+            name: None,
+            visible: true,
+            locked: false,
+            source: "items".to_owned(),
+            layout: RepeatLayout::Grid,
+            template: Box::new(Element::Group(GroupElement {
+                name: Some("Repeated item".to_owned()),
+                visible: true,
+                locked: false,
+                position: Some(bounds(x, y, 144.0, 72.0)),
+                children: vec![Element::Text(TextElement {
+                    name: None,
+                    visible: true,
+                    locked: false,
+                    position: Some(bounds(8.0, 24.0, 128.0, 20.0)),
+                    value: "{{name}}".to_owned(),
+                    font_size: Length::points(11.0),
+                    font: None,
+                    font_style: FontStyle::Bold,
+                    line_height: None,
+                    align: TextAlign::Center,
+                    overflow: TextOverflow::Shrink,
+                    min_font_size: Some(Length::points(7.0)),
+                    color: "#20252A".to_owned(),
+                    rotation: 0.0,
+                })],
+            })),
+        }),
     }
+}
+
+fn flow_text(value: &str, width: f32) -> Element {
+    Element::Text(TextElement {
+        name: None,
+        visible: true,
+        locked: false,
+        position: Some(bounds(0.0, 0.0, width, 36.0)),
+        value: value.to_owned(),
+        font_size: Length::points(11.0),
+        font: None,
+        font_style: FontStyle::Regular,
+        line_height: Some(Length::points(14.0)),
+        align: TextAlign::Left,
+        overflow: TextOverflow::Shrink,
+        min_font_size: Some(Length::points(7.0)),
+        color: "#20252A".to_owned(),
+        rotation: 0.0,
+    })
 }
 
 pub fn new_field(index: usize) -> Field {
@@ -249,7 +400,8 @@ pub fn element_bounds(element: &Element) -> Option<&Bounds> {
         Element::Group(value) => value.position.as_ref(),
         Element::Stack(value) => value.position.as_ref(),
         Element::Table(value) => value.position.as_ref(),
-        Element::Line(_) | Element::Repeater(_) | Element::PageBreak => None,
+        Element::Repeater(value) => element_bounds(&value.template),
+        Element::Line(_) | Element::PageBreak => None,
     }
 }
 
@@ -264,7 +416,8 @@ pub fn element_bounds_mut(element: &mut Element) -> Option<&mut Bounds> {
         Element::Group(value) => value.position.as_mut(),
         Element::Stack(value) => value.position.as_mut(),
         Element::Table(value) => value.position.as_mut(),
-        Element::Line(_) | Element::Repeater(_) | Element::PageBreak => None,
+        Element::Repeater(value) => element_bounds_mut(&mut value.template),
+        Element::Line(_) | Element::PageBreak => None,
     }
 }
 
@@ -642,14 +795,25 @@ mod tests {
 
     #[test]
     fn palette_elements_have_editable_positions() {
-        for kind in ElementKind::ALL {
+        for kind in ElementKind::BASIC.into_iter().chain(ElementKind::ADVANCED) {
             let mut element = new_element(kind, 0.0);
+            let original = element_bounds(&element).map(bounds_points);
             translate_element(&mut element, 10.0, -5.0);
-            if kind != ElementKind::Line {
+            if let Some(original) = original {
                 let bounds = bounds_points(element_bounds(&element).unwrap());
-                assert_eq!(bounds[0], 64.0);
-                assert_eq!(bounds[1], 625.0);
+                assert_eq!(bounds[0], original[0] + 10.0);
+                assert_eq!(bounds[1], original[1] - 5.0);
             }
+        }
+    }
+
+    #[test]
+    fn advanced_palette_elements_round_trip() {
+        for kind in ElementKind::ADVANCED {
+            let element = new_element(kind, 0.0);
+            let json = serde_json::to_string_pretty(&element).unwrap();
+            let decoded = serde_json::from_str(&json).unwrap();
+            assert_eq!(element, decoded, "{} should round trip", kind.label());
         }
     }
 
