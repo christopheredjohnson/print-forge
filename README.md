@@ -12,6 +12,7 @@ so additional renderers can be added without changing the project format.
 
 ```text
 apps/cli          Command-line entry point
+crates/application Reusable render-job orchestration and typed outcomes
 crates/template   Serializable template schema
 crates/dataset    CSV and JSON dataset loading
 crates/engine     Renderer-neutral resolved document and draw commands
@@ -252,6 +253,18 @@ pages until the final multipage PDF is assembled; separate mode keeps only the
 current row's document.
 
 ## Library API
+
+`print-forge-application` is the shared in-process entry point used by the CLI
+and available to services, workers, and interactive applications. A
+`RenderRequest` accepts a parsed `Template`, a `DatasetSource`, assets, render
+options, row limits, and warning policy. `DatasetSource::InMemory` accepts a
+`Dataset`; `DatasetSource::Streaming` accepts any repeatable `RowSource` and is
+used by the CLI to preserve bounded-memory row processing. Callers choose an
+`OutputWriter`; the included `MemoryOutputWriter` returns PDF bytes without
+filesystem output, and `AssetSource::Bundled` accepts asset bytes without
+requiring caller-managed paths. `render_with_progress` reports typed progress events while
+`RenderOutcome`, `JobSummary`, `RecordSummary`, `JobDiagnostic`, and `JobError`
+preserve machine-readable status and row/page/element context.
 
 The renderer-neutral `LayoutEngine` trait accepts `LayoutOptions`, and the
 `DocumentRenderer` trait returns the stable `PdfResult`/`PdfError` boundary.

@@ -73,6 +73,26 @@ fn malformed_templates_fail_before_validation() {
 }
 
 #[test]
+fn malformed_template_precedes_a_conflicting_summary_path() {
+    let directory = TestDir::new("malformed-summary-conflict");
+    let template = directory.write("template.json", "{");
+    let dataset = directory.write("dataset.json", "[]");
+    let output_path = directory.path().join("output.pdf");
+    let output = run(&[
+        "render",
+        template.to_str().unwrap(),
+        dataset.to_str().unwrap(),
+        output_path.to_str().unwrap(),
+        "--summary",
+        output_path.to_str().unwrap(),
+    ]);
+
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("failed to parse template"));
+    assert!(!stderr(&output).contains("summary path must be different"));
+}
+
+#[test]
 fn json_output_is_machine_readable_and_input_failures_use_exit_code_three() {
     let directory = TestDir::new("json-output");
     let dataset = directory.write("dataset.JSON", r#"[{"name":"Ada"}]"#);

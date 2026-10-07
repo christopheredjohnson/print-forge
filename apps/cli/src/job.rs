@@ -2,23 +2,21 @@ use std::{
     collections::HashSet,
     fs,
     ops::ControlFlow,
-    ops::Range,
     path::{Path, PathBuf},
     str::FromStr,
-    time::Instant,
 };
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, bail};
 use clap::{Args, ValueEnum};
-use print_forge_dataset::{DataRow, Dataset, visit_path};
-use print_forge_engine::{BasicLayoutEngine, LayoutOptions, ResolvedDocument};
-use print_forge_pdf::{PdfRenderOptions, PdfRenderer, PdfXStandard};
-use print_forge_template::Template;
-use print_forge_validation::{validate_data_row, validate_dataset, validate_template};
-use serde::Serialize;
-use serde_json::Value;
+use print_forge_application::{
+    AssetSource, BoxError, DatasetSource, DiagnosticPhase, JobSummary, OutputArtifact, OutputMode,
+    OutputWriter, PdfRenderOptions, PdfXStandard, ProgressEvent, RenderOptions, RenderRequest,
+    RowRange as ApplicationRowRange, RowSource, WarningPolicy as ApplicationWarningPolicy,
+    render_with_progress,
+};
+use print_forge_dataset::{DataRow, visit_path};
 
-use crate::{OutputOptions, load_template, print_diagnostics, require_acceptable, write_json};
+use crate::{OutputOptions, WarningPolicy, load_template, write_json};
 
 #[derive(Debug, Args)]
 pub(crate) struct RenderArgs {
@@ -27,8 +25,8 @@ pub(crate) struct RenderArgs {
     /// PDF path in combined mode; output directory in separate mode.
     pub(crate) output: PathBuf,
     /// Write one combined PDF or one PDF for each selected row.
-    #[arg(long, value_enum, default_value_t = OutputMode::Combined)]
-    pub(crate) output_mode: OutputMode,
+    #[arg(long, value_enum, default_value_t = CliOutputMode::Combined)]
+    pub(crate) output_mode: CliOutputMode,
     /// One-based inclusive dataset row range, for example 2-5.
     #[arg(long, value_name = "START-END")]
     pub(crate) rows: Option<RowRange>,
@@ -62,9 +60,18 @@ pub(crate) struct RenderArgs {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-pub(crate) enum OutputMode {
+pub(crate) enum CliOutputMode {
     Combined,
     Separate,
+}
+
+impl From<CliOutputMode> for OutputMode {
+    fn from(value: CliOutputMode) -> Self {
+        match value {
+            CliOutputMode::Combined => Self::Combined,
+            CliOutputMode::Separate => Self::Separate,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -73,27 +80,15 @@ pub(crate) enum PdfXTarget {
 }
 
 impl From<PdfXTarget> for PdfXStandard {
-    fn from(target: PdfXTarget) -> Self {
-        match target {
+    fn from(value: PdfXTarget) -> Self {
+        match value {
             PdfXTarget::X4 => Self::X4,
         }
     }
 }
 
-impl OutputMode {
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::Combined => "combined",
-            Self::Separate => "separate",
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct RowRange {
-    start: usize,
-    end: usize,
-}
+pub(crate) struct RowRange(ApplicationRowRange);
 
 impl FromStr for RowRange {
     type Err = String;
@@ -108,593 +103,247 @@ impl FromStr for RowRange {
         let end = end
             .parse::<usize>()
             .map_err(|_| "row range end must be a positive integer".to_owned())?;
-
-        if start == 0 || end == 0 {
-            return Err("row ranges are one-based; both values must be at least 1".to_owned());
-        }
-        if start > end {
-            return Err("row range start cannot be greater than its end".to_owned());
-        }
-
-        Ok(Self { start, end })
+        ApplicationRowRange::new(start, end)
+            .map(Self)
+            .map_err(|error| error.to_string())
     }
-}
-
-#[derive(Debug, Serialize)]
-struct JobSummary {
-    status: JobStatus,
-    output_mode: &'static str,
-    selected_rows: usize,
-    successes: usize,
-    warnings: usize,
-    failures: usize,
-    outputs: Vec<String>,
-    records: Vec<RecordSummary>,
-    elapsed_ms: u128,
-    dry_run: bool,
-}
-
-impl JobSummary {
-    fn new(output_mode: OutputMode, selected_rows: usize, warnings: usize, dry_run: bool) -> Self {
-        Self {
-            status: JobStatus::Succeeded,
-            output_mode: output_mode.as_str(),
-            selected_rows,
-            successes: 0,
-            warnings,
-            failures: 0,
-            outputs: Vec::new(),
-            records: Vec::new(),
-            elapsed_ms: 0,
-            dry_run,
-        }
-    }
-
-    fn success(&mut self, row_index: usize, warnings: usize, output: &Path) {
-        let output = output.display().to_string();
-        if !self.outputs.contains(&output) {
-            self.outputs.push(output.clone());
-        }
-        self.successes += 1;
-        self.warnings += warnings;
-        self.records.push(RecordSummary {
-            row_index,
-            row_number: row_index + 1,
-            status: RecordStatus::Succeeded,
-            warnings,
-            output: Some(output),
-            error: None,
-        });
-    }
-
-    fn failure(&mut self, row_index: usize, warnings: usize, error: &anyhow::Error) {
-        self.failures += 1;
-        self.warnings += warnings;
-        self.records.push(RecordSummary {
-            row_index,
-            row_number: row_index + 1,
-            status: RecordStatus::Failed,
-            warnings,
-            output: None,
-            error: Some(format!("{error:#}")),
-        });
-    }
-
-    fn finish(&mut self, elapsed_ms: u128) {
-        self.records.sort_by_key(|record| record.row_index);
-        self.elapsed_ms = elapsed_ms;
-        self.status = match (self.successes, self.failures) {
-            (_, 0) => JobStatus::Succeeded,
-            (0, _) => JobStatus::Failed,
-            _ => JobStatus::Partial,
-        };
-    }
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "snake_case")]
-enum JobStatus {
-    Succeeded,
-    Partial,
-    Failed,
-}
-
-#[derive(Debug, Serialize)]
-struct RecordSummary {
-    row_index: usize,
-    row_number: usize,
-    status: RecordStatus,
-    warnings: usize,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    output: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "snake_case")]
-enum RecordStatus {
-    Succeeded,
-    Failed,
-}
-
-struct PreparedRow {
-    row_index: usize,
-    warnings: usize,
-    document: ResolvedDocument,
 }
 
 pub(crate) fn render(arguments: &RenderArgs, output_options: OutputOptions) -> Result<()> {
-    let started = Instant::now();
     let template = load_template(&arguments.template)?;
-
-    let template_report = validate_template(&template);
-    print_diagnostics(&template_report, output_options);
-    require_acceptable(&template_report, output_options.warnings)?;
-
-    let row_count = visit_path(&arguments.dataset, |_, _| ControlFlow::Continue(()))?.rows();
-    if row_count == 0 {
-        let dataset = Dataset::default();
-        let report = validate_dataset(&template, &dataset);
-        print_diagnostics(&report, output_options);
-        require_acceptable(&report, output_options.warnings)?;
-    }
-
-    let row_indices = select_rows(row_count, arguments.rows, arguments.limit)?;
-    if arguments.output_mode == OutputMode::Separate {
-        validate_name_pattern(&arguments.output_name)?;
-    }
-    if arguments.summary.as_deref() == Some(arguments.output.as_path()) {
-        bail!("summary path must be different from the PDF output path");
-    }
-    let pdf_options = render_options(arguments)?;
-
-    if !arguments.dry_run {
-        prepare_output(arguments.output_mode, &arguments.output)?;
-    }
-
-    let mut summary = JobSummary::new(
-        arguments.output_mode,
-        row_indices.len(),
-        template_report.warning_count(),
-        arguments.dry_run,
+    let mut dataset = PathRowSource(&arguments.dataset);
+    let mut writer = FileOutputWriter::new(
+        arguments.output_mode.into(),
+        &arguments.output,
+        arguments.summary.as_deref(),
     );
-    let asset_base = arguments
-        .template
-        .parent()
-        .unwrap_or_else(|| Path::new("."))
-        .to_owned();
-    let mut prepared = Vec::new();
-    let mut reserved_names = HashSet::new();
-    let mut stopped = false;
+    let request = RenderRequest {
+        template: &template,
+        dataset: DatasetSource::Streaming(&mut dataset),
+        assets: AssetSource::Directory(
+            arguments
+                .template
+                .parent()
+                .unwrap_or_else(|| Path::new("."))
+                .to_owned(),
+        ),
+        options: RenderOptions {
+            output_mode: arguments.output_mode.into(),
+            rows: arguments.rows.map(|range| range.0),
+            limit: arguments.limit,
+            continue_on_error: arguments.continue_on_error,
+            output_name: arguments.output_name.clone(),
+            pdf: pdf_options(arguments),
+            dry_run: arguments.dry_run,
+            warnings: match output_options.warnings {
+                WarningPolicy::Allow => ApplicationWarningPolicy::Allow,
+                WarningPolicy::Deny => ApplicationWarningPolicy::Deny,
+                WarningPolicy::Ignore => ApplicationWarningPolicy::Ignore,
+            },
+        },
+    };
 
-    if output_options.verbose > 0 && !output_options.json {
-        eprintln!(
-            "processing {} selected row(s) from {}{}",
-            row_indices.len(),
-            arguments.dataset.display(),
-            if arguments.dry_run { " (dry run)" } else { "" }
-        );
-    }
+    let outcome = render_with_progress(request, &mut writer, |event| {
+        report_progress(&event, arguments, output_options);
+    })?;
 
-    visit_path(&arguments.dataset, |row_index, row| {
-        if row_index < row_indices.start {
-            return ControlFlow::Continue(());
-        }
-        if row_index >= row_indices.end {
-            return ControlFlow::Break(());
-        }
-        if output_options.verbose > 1 && !output_options.json {
-            eprintln!("processing dataset row {row_index}");
-        }
-        let row_report = validate_data_row(&template, &row, row_index);
-        print_diagnostics(&row_report, output_options);
-        let warnings = row_report.warning_count();
-
-        if require_acceptable(&row_report, output_options.warnings).is_err() {
-            let error = anyhow!(
-                "validation failed for dataset row {row_index} with {} error(s) and {} warning(s)",
-                row_report.error_count(),
-                row_report.warning_count()
-            );
-            report_row_failure(&mut summary, row_index, warnings, &error, output_options);
-            if !arguments.continue_on_error {
-                stopped = true;
-                return ControlFlow::Break(());
-            }
-            return ControlFlow::Continue(());
-        }
-
-        let rendered = render_row(&template, &row, row_index, &asset_base, &pdf_options);
-        let (document, pdf) = match rendered {
-            Ok(rendered) => rendered,
-            Err(error) => {
-                report_row_failure(&mut summary, row_index, warnings, &error, output_options);
-                if !arguments.continue_on_error {
-                    stopped = true;
-                    return ControlFlow::Break(());
-                }
-                return ControlFlow::Continue(());
-            }
-        };
-
-        match arguments.output_mode {
-            OutputMode::Combined => prepared.push(PreparedRow {
-                row_index,
-                warnings,
-                document,
-            }),
-            OutputMode::Separate => {
-                let output = resolve_separate_output(
-                    &arguments.output,
-                    &arguments.output_name,
-                    &row,
-                    row_index,
-                    &mut reserved_names,
-                )
-                .and_then(|output| {
-                    if !arguments.dry_run {
-                        write_pdf(&output, &pdf)?;
-                    }
-                    Ok(output)
-                });
-
-                match output {
-                    Ok(output) => {
-                        if !output_options.json {
-                            println!(
-                                "{} dataset row {row_index} to {} ({} page(s), {} bytes)",
-                                if arguments.dry_run {
-                                    "checked"
-                                } else {
-                                    "rendered"
-                                },
-                                output.display(),
-                                document.pages.len(),
-                                pdf.len()
-                            );
-                        }
-                        summary.success(row_index, warnings, &output);
-                    }
-                    Err(error) => {
-                        report_row_failure(
-                            &mut summary,
-                            row_index,
-                            warnings,
-                            &error,
-                            output_options,
-                        );
-                        if !arguments.continue_on_error {
-                            stopped = true;
-                            return ControlFlow::Break(());
-                        }
-                    }
-                }
-            }
-        }
-        ControlFlow::Continue(())
-    })
-    .map_err(|error| anyhow!(error))?;
-
-    if arguments.output_mode == OutputMode::Combined && !stopped && !prepared.is_empty() {
-        if let Err(error) = write_combined_output(
-            &template,
-            &prepared,
-            &arguments.output,
-            &pdf_options,
-            &mut summary,
-            arguments.dry_run,
-            output_options,
-        ) {
-            if !output_options.json {
-                eprintln!("combined output failed: {error:#}");
-            }
-            for row in &prepared {
-                summary.failure(row.row_index, row.warnings, &error);
-            }
-        }
-    }
-
-    summary.finish(started.elapsed().as_millis());
     if !arguments.dry_run
         && let Some(path) = &arguments.summary
     {
-        write_summary(path, &summary)?;
+        write_summary(path, &outcome.summary)?;
     }
-
-    if summary.failures > 0 {
+    if outcome.summary.failures > 0 {
         bail!(
             "rendering completed with {} failed dataset row(s)",
-            summary.failures
+            outcome.summary.failures
         );
     }
-    if stopped {
+    if outcome.stopped_early {
         bail!("rendering stopped before producing output");
     }
 
     if output_options.json {
-        write_json(&summary)?;
+        write_json(&outcome.summary)?;
     } else {
         println!(
             "{} summary: {} success(es), {} warning(s), {} failure(s), {} ms",
             if arguments.dry_run { "dry-run" } else { "job" },
-            summary.successes,
-            summary.warnings,
-            summary.failures,
-            summary.elapsed_ms
+            outcome.summary.successes,
+            outcome.summary.warnings,
+            outcome.summary.failures,
+            outcome.summary.elapsed_ms
         );
     }
-
     Ok(())
 }
 
-fn render_options(arguments: &RenderArgs) -> Result<PdfRenderOptions> {
+struct PathRowSource<'a>(&'a Path);
+
+impl RowSource for PathRowSource<'_> {
+    fn row_count(&mut self) -> std::result::Result<usize, BoxError> {
+        visit_path(self.0, |_, _| ControlFlow::Continue(()))
+            .map(|outcome| outcome.rows())
+            .map_err(|error| Box::new(error) as BoxError)
+    }
+
+    fn visit(
+        &mut self,
+        visitor: &mut dyn FnMut(usize, DataRow) -> ControlFlow<()>,
+    ) -> std::result::Result<(), BoxError> {
+        visit_path(self.0, visitor)
+            .map(|_| ())
+            .map_err(|error| Box::new(error) as BoxError)
+    }
+}
+
+fn pdf_options(arguments: &RenderArgs) -> PdfRenderOptions {
     let mut options = if arguments.print_ready {
         PdfRenderOptions::print_ready()
     } else {
         PdfRenderOptions::default()
     };
     if let Some(minimum) = arguments.min_image_dpi {
-        if !minimum.is_finite() || minimum <= 0.0 {
-            bail!("--min-image-dpi must be positive and finite");
-        }
         options.min_image_dpi = Some(minimum);
     }
     options.require_embedded_fonts |= arguments.require_embedded_fonts;
     if let Some(target) = arguments.pdf_x {
         options.pdf_x = Some(target.into());
     }
-    Ok(options)
+    options
 }
 
-fn select_rows(
-    row_count: usize,
-    range: Option<RowRange>,
-    limit: Option<usize>,
-) -> Result<Range<usize>> {
-    if row_count == 0 {
-        bail!("cannot select rows from an empty dataset");
+fn report_progress(event: &ProgressEvent, arguments: &RenderArgs, output: OutputOptions) {
+    if output.json {
+        return;
     }
-    if limit == Some(0) {
-        bail!("--limit must be at least 1");
+    match event {
+        ProgressEvent::Started {
+            selected_rows,
+            dry_run,
+        } if output.verbose > 0 => eprintln!(
+            "processing {selected_rows} selected row(s) from {}{}",
+            arguments.dataset.display(),
+            if *dry_run { " (dry run)" } else { "" }
+        ),
+        ProgressEvent::Diagnostic(diagnostic)
+            if diagnostic.phase == DiagnosticPhase::Validation =>
+        {
+            eprintln!("{diagnostic}");
+        }
+        ProgressEvent::RowStarted { row_index } if output.verbose > 1 => {
+            eprintln!("processing dataset row {row_index}");
+        }
+        ProgressEvent::RowSucceeded {
+            row_index,
+            output,
+            pages,
+            bytes,
+            dry_run,
+        } => println!(
+            "{} dataset row {row_index} to {output} ({pages} page(s), {bytes} bytes)",
+            if *dry_run { "checked" } else { "rendered" }
+        ),
+        ProgressEvent::RowFailed { row_index, error } => {
+            eprintln!("dataset row {row_index} failed: {error}");
+        }
+        ProgressEvent::CombinedSucceeded {
+            rows,
+            output,
+            pages,
+            bytes,
+            dry_run,
+        } => println!(
+            "{} {rows} dataset row(s) to {output} ({pages} page(s), {bytes} bytes)",
+            if *dry_run { "checked" } else { "rendered" }
+        ),
+        ProgressEvent::Started { .. }
+        | ProgressEvent::Diagnostic(_)
+        | ProgressEvent::RowStarted { .. }
+        | ProgressEvent::Finished { .. } => {}
     }
-
-    let range = range.unwrap_or(RowRange {
-        start: 1,
-        end: row_count,
-    });
-    if range.end > row_count {
-        bail!(
-            "row range {}-{} exceeds dataset length {row_count}",
-            range.start,
-            range.end
-        );
-    }
-
-    let start = range.start - 1;
-    let end = limit.map_or(range.end, |limit| range.end.min(start + limit));
-    Ok(start..end)
 }
 
-fn prepare_output(mode: OutputMode, output: &Path) -> Result<()> {
-    match mode {
-        OutputMode::Combined => ensure_parent(output),
-        OutputMode::Separate => fs::create_dir_all(output)
-            .with_context(|| format!("failed to create output directory {}", output.display())),
-    }
+struct FileOutputWriter {
+    mode: OutputMode,
+    output: PathBuf,
+    summary_conflicts: bool,
+    reserved: HashSet<String>,
 }
 
-fn render_row(
-    template: &Template,
-    row: &DataRow,
-    row_index: usize,
-    asset_base: &Path,
-    pdf_options: &PdfRenderOptions,
-) -> Result<(ResolvedDocument, Vec<u8>)> {
-    let mut document = BasicLayoutEngine
-        .layout_with_options(
-            template,
-            row,
-            &LayoutOptions {
-                asset_base: asset_base.to_owned(),
-            },
-        )
-        .with_context(|| format!("failed to lay out dataset row {row_index}"))?;
-
-    for page in &mut document.pages {
-        for command in &mut page.commands {
-            command.source_path = format!("rows[{row_index}].{}", command.source_path);
+impl FileOutputWriter {
+    fn new(mode: OutputMode, output: &Path, summary: Option<&Path>) -> Self {
+        Self {
+            mode,
+            output: output.to_owned(),
+            summary_conflicts: summary == Some(output),
+            reserved: HashSet::new(),
         }
     }
 
-    let pdf = PdfRenderer
-        .render_with_options(&document, pdf_options)
-        .with_context(|| format!("failed to render dataset row {row_index}"))?;
-    Ok((document, pdf))
-}
-
-fn write_combined_output(
-    template: &Template,
-    prepared: &[PreparedRow],
-    output: &Path,
-    pdf_options: &PdfRenderOptions,
-    summary: &mut JobSummary,
-    dry_run: bool,
-    output_options: OutputOptions,
-) -> Result<()> {
-    let width_pt = prepared[0].document.width_pt;
-    let height_pt = prepared[0].document.height_pt;
-    let mut pages = Vec::new();
-    for row in prepared {
-        pages.extend(row.document.pages.iter().cloned());
-    }
-    let document = ResolvedDocument {
-        title: format!("{} variable-data job", template.name),
-        width_pt,
-        height_pt,
-        bleed_pt: prepared[0].document.bleed_pt,
-        metadata: template.document.metadata.clone(),
-        pages,
-    };
-    let pdf = PdfRenderer
-        .render_with_options(&document, pdf_options)
-        .context("failed to render combined PDF")?;
-    if !dry_run {
-        write_pdf(output, &pdf)?;
-    }
-
-    if !output_options.json {
-        println!(
-            "{} {} dataset row(s) to {} ({} page(s), {} bytes)",
-            if dry_run { "checked" } else { "rendered" },
-            prepared.len(),
-            output.display(),
-            document.pages.len(),
-            pdf.len()
-        );
-    }
-    for row in prepared {
-        summary.success(row.row_index, row.warnings, output);
-    }
-    Ok(())
-}
-
-fn resolve_separate_output(
-    directory: &Path,
-    pattern: &str,
-    row: &DataRow,
-    row_index: usize,
-    reserved: &mut HashSet<String>,
-) -> Result<PathBuf> {
-    let interpolated = interpolate_name(pattern, row, row_index)?;
-    let stem = sanitize_filename(&interpolated);
-    if stem.is_empty() {
-        bail!("output name for dataset row {row_index} contains no safe filename characters");
-    }
-
-    for suffix in 1.. {
-        let candidate_stem = if suffix == 1 {
-            stem.clone()
-        } else {
-            format!("{stem}-{suffix}")
-        };
-        let reservation = candidate_stem.to_ascii_lowercase();
-        let candidate = directory.join(format!("{candidate_stem}.pdf"));
-        if !reserved.contains(&reservation) && !candidate.exists() {
-            reserved.insert(reservation);
-            return Ok(candidate);
-        }
-    }
-
-    unreachable!("the collision suffix is unbounded")
-}
-
-fn validate_name_pattern(pattern: &str) -> Result<()> {
-    let mut remaining = pattern;
-    while let Some(start) = remaining.find("{{") {
-        if remaining[..start].contains("}}") {
-            bail!("output name contains an unmatched closing delimiter");
-        }
-        let expression = &remaining[start + 2..];
-        let end = expression
-            .find("}}")
-            .ok_or_else(|| anyhow!("output name contains an unclosed variable"))?;
-        if expression[..end].trim().is_empty() {
-            bail!("output name variable cannot be empty");
-        }
-        remaining = &expression[end + 2..];
-    }
-    if remaining.contains("}}") {
-        bail!("output name contains an unmatched closing delimiter");
-    }
-    Ok(())
-}
-
-fn interpolate_name(pattern: &str, row: &DataRow, row_index: usize) -> Result<String> {
-    let mut output = String::with_capacity(pattern.len());
-    let mut remaining = pattern;
-
-    while let Some(start) = remaining.find("{{") {
-        output.push_str(&remaining[..start]);
-        let expression = &remaining[start + 2..];
-        let end = expression
-            .find("}}")
-            .ok_or_else(|| anyhow!("output name contains an unclosed variable"))?;
-        let key = expression[..end].trim();
-
-        if key == "row" {
-            output.push_str(&(row_index + 1).to_string());
-        } else {
-            let value = lookup_value(row, key).ok_or_else(|| {
-                anyhow!("output name variable is missing for dataset row {row_index}: {key}")
-            })?;
-            output.push_str(&filename_value(value, key, row_index)?);
-        }
-        remaining = &expression[end + 2..];
-    }
-
-    output.push_str(remaining);
-    Ok(output)
-}
-
-fn lookup_value<'a>(row: &'a DataRow, path: &str) -> Option<&'a Value> {
-    let mut segments = path.split('.');
-    let mut value = row.get(segments.next()?)?;
-    for segment in segments {
-        value = value.get(segment)?;
-    }
-    Some(value)
-}
-
-fn filename_value(value: &Value, key: &str, row_index: usize) -> Result<String> {
-    match value {
-        Value::String(value) => Ok(value.clone()),
-        Value::Number(value) => Ok(value.to_string()),
-        Value::Bool(value) => Ok(value.to_string()),
-        Value::Null => bail!("output name variable is null for dataset row {row_index}: {key}"),
-        Value::Array(_) | Value::Object(_) => {
-            bail!("output name variable must be a scalar for dataset row {row_index}: {key}")
-        }
-    }
-}
-
-fn sanitize_filename(value: &str) -> String {
-    let mut output = String::with_capacity(value.len());
-    let mut needs_separator = false;
-
-    for character in value.trim().chars() {
-        if character.is_ascii_alphanumeric() || matches!(character, '-' | '_') {
-            if needs_separator && !output.is_empty() && !output.ends_with(['-', '_']) {
-                output.push('-');
+    fn separate_path(&mut self, stem: &str) -> PathBuf {
+        for suffix in 1.. {
+            let candidate_stem = if suffix == 1 {
+                stem.to_owned()
+            } else {
+                format!("{stem}-{suffix}")
+            };
+            let reservation = candidate_stem.to_ascii_lowercase();
+            let candidate = self.output.join(format!("{candidate_stem}.pdf"));
+            if !self.reserved.contains(&reservation) && !candidate.exists() {
+                self.reserved.insert(reservation);
+                return candidate;
             }
-            output.push(character);
-            needs_separator = false;
-        } else {
-            needs_separator = true;
         }
+        unreachable!("the collision suffix is unbounded")
     }
-
-    output
-        .trim_matches(|character| matches!(character, '-' | '_'))
-        .to_owned()
 }
 
-fn report_row_failure(
-    summary: &mut JobSummary,
-    row_index: usize,
-    warnings: usize,
-    error: &anyhow::Error,
-    output_options: OutputOptions,
-) {
-    if !output_options.json {
-        eprintln!("dataset row {row_index} failed: {error:#}");
+impl OutputWriter for FileOutputWriter {
+    fn validate(&mut self, _mode: OutputMode) -> Result<(), BoxError> {
+        if self.summary_conflicts {
+            return Err(std::io::Error::other(
+                "summary path must be different from the PDF output path",
+            )
+            .into());
+        }
+        Ok(())
     }
-    summary.failure(row_index, warnings, error);
-}
 
-fn write_pdf(path: &Path, pdf: &[u8]) -> Result<()> {
-    ensure_parent(path)?;
-    fs::write(path, pdf).with_context(|| format!("failed to write PDF {}", path.display()))
+    fn prepare(&mut self, mode: OutputMode, dry_run: bool) -> Result<(), BoxError> {
+        if dry_run {
+            return Ok(());
+        }
+        match mode {
+            OutputMode::Combined => ensure_parent(&self.output),
+            OutputMode::Separate => fs::create_dir_all(&self.output).map_err(|source| {
+                std::io::Error::new(
+                    source.kind(),
+                    format!(
+                        "failed to create output directory {}: {source}",
+                        self.output.display()
+                    ),
+                )
+            }),
+        }
+        .map_err(|error| Box::new(error) as BoxError)
+    }
+
+    fn write(&mut self, artifact: OutputArtifact<'_>, dry_run: bool) -> Result<String, BoxError> {
+        let path = match self.mode {
+            OutputMode::Combined => self.output.clone(),
+            OutputMode::Separate => self.separate_path(artifact.suggested_name),
+        };
+        if !dry_run {
+            ensure_parent(&path).map_err(|error| -> BoxError { Box::new(error) })?;
+            fs::write(&path, artifact.bytes).map_err(|source| -> BoxError {
+                Box::new(std::io::Error::new(
+                    source.kind(),
+                    format!("failed to write PDF {}: {source}", path.display()),
+                ))
+            })?;
+        }
+        Ok(path.display().to_string())
+    }
 }
 
 fn write_summary(path: &Path, summary: &JobSummary) -> Result<()> {
@@ -704,49 +353,32 @@ fn write_summary(path: &Path, summary: &JobSummary) -> Result<()> {
     fs::write(path, json).with_context(|| format!("failed to write job summary {}", path.display()))
 }
 
-fn ensure_parent(path: &Path) -> Result<()> {
+fn ensure_parent(path: &Path) -> std::io::Result<()> {
     if let Some(parent) = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
     {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create output directory {}", parent.display()))?;
+        fs::create_dir_all(parent).map_err(|source| {
+            std::io::Error::new(
+                source.kind(),
+                format!(
+                    "failed to create output directory {}: {source}",
+                    parent.display()
+                ),
+            )
+        })?;
     }
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use print_forge_dataset::DataRow;
-    use serde_json::json;
-
-    use super::{RowRange, interpolate_name, sanitize_filename, select_rows};
+    use super::RowRange;
 
     #[test]
-    fn parses_and_selects_one_based_inclusive_ranges_before_limiting() {
+    fn parses_one_based_inclusive_ranges() {
         let range = "2-5".parse::<RowRange>().unwrap();
-
-        assert_eq!(select_rows(8, Some(range), Some(2)).unwrap(), 1..3);
-    }
-
-    #[test]
-    fn interpolates_dotted_values_and_the_one_based_row_number() {
-        let row: DataRow = serde_json::from_value(json!({
-            "customer": { "invoice": "INV-42" }
-        }))
-        .unwrap();
-
-        assert_eq!(
-            interpolate_name("{{customer.invoice}}-{{row}}", &row, 2).unwrap(),
-            "INV-42-3"
-        );
-    }
-
-    #[test]
-    fn sanitizes_path_components_from_output_names() {
-        assert_eq!(
-            sanitize_filename(" ../../ACME / Invoice 7 "),
-            "ACME-Invoice-7"
-        );
+        assert_eq!(range.0.start(), 2);
+        assert_eq!(range.0.end(), 5);
     }
 }

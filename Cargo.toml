@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "apps/cli",
+    "crates/application",
     "crates/dataset",
     "crates/engine",
     "crates/pdf",
@@ -30,6 +31,7 @@ thiserror = "2.0.20"
 ttf-parser = "0.25.1"
 
 print-forge-dataset = { path = "crates/dataset" }
+print-forge-application = { path = "crates/application" }
 print-forge-engine = { path = "crates/engine" }
 print-forge-pdf = { path = "crates/pdf" }
 print-forge-template = { path = "crates/template" }

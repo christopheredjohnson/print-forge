@@ -138,6 +138,39 @@ fn dry_run_preflights_all_rows_without_writing_files() {
 }
 
 #[test]
+fn invalid_render_limits_keep_cli_specific_error_messages() {
+    let directory = TestDir::new("invalid-render-limits");
+    let template = directory.write("template.json", job_template());
+    let dataset = directory.write("dataset.json", r#"[{"name":"One"}]"#);
+    let pdf = directory.path().join("output.pdf");
+
+    let invalid_limit = run(&[
+        "render",
+        template.to_str().unwrap(),
+        dataset.to_str().unwrap(),
+        pdf.to_str().unwrap(),
+        "--limit",
+        "0",
+    ]);
+    assert_eq!(invalid_limit.status.code(), Some(4));
+    assert!(String::from_utf8_lossy(&invalid_limit.stderr).contains("--limit must be at least 1"));
+
+    let invalid_dpi = run(&[
+        "render",
+        template.to_str().unwrap(),
+        dataset.to_str().unwrap(),
+        pdf.to_str().unwrap(),
+        "--min-image-dpi",
+        "0",
+    ]);
+    assert_eq!(invalid_dpi.status.code(), Some(4));
+    assert!(
+        String::from_utf8_lossy(&invalid_dpi.stderr)
+            .contains("--min-image-dpi must be positive and finite")
+    );
+}
+
+#[test]
 fn render_json_output_is_single_document_and_job_failures_use_exit_code_four() {
     let directory = TestDir::new("render-json");
     let template = directory.write("template.json", job_template());
