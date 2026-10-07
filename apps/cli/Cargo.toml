@@ -12,9 +12,8 @@ path = "src/main.rs"
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
+print-forge-application.workspace = true
 print-forge-dataset.workspace = true
-print-forge-engine.workspace = true
-print-forge-pdf.workspace = true
 print-forge-template.workspace = true
 print-forge-validation.workspace = true
 serde.workspace = true

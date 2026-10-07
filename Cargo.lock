@@ -1099,15 +1099,30 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "439ee305def115ba05938db6eb1644ff94165c5ab5e9420d1c1bcedbba909391"
 
 [[package]]
+name = "print-forge-application"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "print-forge-dataset",
+ "print-forge-engine",
+ "print-forge-pdf",
+ "print-forge-template",
+ "print-forge-validation",
+ "printpdf",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "print-forge-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
  "lopdf",
+ "print-forge-application",
  "print-forge-dataset",
- "print-forge-engine",
- "print-forge-pdf",
  "print-forge-template",
  "print-forge-validation",
  "printpdf",
